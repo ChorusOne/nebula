@@ -1,0 +1,10 @@
+private_key_path = "privkey"
+chain_id = "testing"
+# version = "v0_38"
+version = "v1_0"
+
+[connection]
+host = "127.0.0.1"
+port = 26658
+identity_key_path = "./privkey"
+secret_connection_version = "v0_34"
