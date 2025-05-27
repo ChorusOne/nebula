@@ -101,3 +101,25 @@ if you are a signer:
 Source for above: https://docs.cometbft.com/v1.0/spec/consensus/signing
 
 https://arxiv.org/pdf/1807.04938
+
+### Code generation from proto files
+
+Install buf:
+```
+GOBIN=/usr/local/bin go install github.com/bufbuild/buf/cmd/buf@v1.54.0
+```
+
+
+Create an account at https://buf.build
+
+Get a token, for example here: https://buf.build/cometbft/cometbft/sdks/main:community/neoeinstein-prost
+
+Login so you won't get rate-limited:
+```
+cargo login --registry buf "Bearer {token}"
+```
+
+Generate files (you shouldn't need to do that):
+```
+buf generate --template buf.gen.yaml
+```
