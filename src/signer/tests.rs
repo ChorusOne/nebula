@@ -17,35 +17,7 @@ impl SigningBackend for Dummy {
     }
 }
 
-struct TestCursor {
-    inner: Cursor<Vec<u8>>,
-}
-
-impl TestCursor {
-    fn new(data: Vec<u8>) -> Self {
-        Self {
-            inner: Cursor::new(data),
-        }
-    }
-}
-
-impl Read for TestCursor {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        self.inner.read(buf)
-    }
-}
-
-impl Write for TestCursor {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.inner.get_mut().extend_from_slice(buf);
-        Ok(buf.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
-type TS = Signer<Dummy, VersionV0_38, TestCursor>;
+type TS = Signer<Dummy, VersionV0_38, Cursor<Vec<u8>>>;
 
 fn create_ping_message() -> Vec<u8> {
     let msg = v0_38::privval::Message {
@@ -61,7 +33,7 @@ fn create_ping_message() -> Vec<u8> {
 #[test]
 fn ping_request() {
     let ping_data = create_ping_message();
-    let mut s = TS::new(Dummy, TestCursor::new(ping_data), "test-chain".into());
+    let mut s = TS::new(Dummy, Cursor::new(ping_data), "test-chain".into());
 
     let req = s.read_request().unwrap();
     assert!(matches!(req, Request::PingRequest));
@@ -78,7 +50,7 @@ fn multiple_ping_messages_in_stream() {
     let ping2 = create_ping_message();
     let combined = [ping1, ping2].concat();
 
-    let mut s = TS::new(Dummy, TestCursor::new(combined), "test-chain".into());
+    let mut s = TS::new(Dummy, Cursor::new(combined), "test-chain".into());
 
     let req1 = s.read_request().unwrap();
     assert!(matches!(req1, Request::PingRequest));
