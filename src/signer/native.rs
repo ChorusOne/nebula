@@ -16,9 +16,7 @@ impl NativeSigner {
         let key_string = fs::read_to_string(path)?.trim().to_string();
         let key_bytes = general_purpose::STANDARD.decode(key_string)?;
 
-        let signing_key = if key_bytes.len() == 32 {
-            SigningKey::from(<[u8; 32]>::try_from(&key_bytes[..32])?)
-        } else if key_bytes.len() == 64 {
+        let signing_key = if key_bytes.len() == 32 || key_bytes.len() == 64 {
             SigningKey::from(<[u8; 32]>::try_from(&key_bytes[..32])?)
         } else {
             return Err(format!("Invalid key size, length: {}", key_bytes.len()).into());
