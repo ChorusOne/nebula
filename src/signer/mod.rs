@@ -76,7 +76,7 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
         Ok(request)
     }
 
-    fn try_read_complete_message(&self, buffer: &[u8]) -> Result<usize, InsufficientData> {
+    fn try_read_complete_message<'a>(&self, buffer: &'a [u8]) -> Result<usize, InsufficientData> {
         match V::Message::decode_length_delimited(buffer) {
             Ok(decoded_message) => {
                 let message_len = decoded_message.encoded_len();
