@@ -1,70 +1,25 @@
+mod backend;
 mod config;
 mod connection;
 mod protocol;
 mod signer;
-mod tcp;
 mod types;
 mod versions;
 
+use backend::{NativeSigner, SigningBackend};
 use config::{Config, ProtocolVersionConfig};
 use connection::open_secret_connection;
-use signer::{NativeSigner, SigningBackend};
-use tcp::TcpSigner;
-use versions::{ProtocolVersion, VersionV0_34, VersionV0_37, VersionV0_38, VersionV1_0};
-
-trait Signer {
-    fn run(&mut self) -> Result<(), Box<dyn std::error::Error>>;
-}
-
-impl<T: SigningBackend, V: ProtocolVersion> Signer for TcpSigner<T, V> {
-    fn run(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        self.run()
-    }
-}
-
-fn create_signer(config: Config) -> Result<Box<dyn Signer>, Box<dyn std::error::Error>> {
-    let signer = NativeSigner::from_key_file(&config.private_key_path)?;
-
-    let identity_key = ed25519_consensus::SigningKey::try_from(
-        &std::fs::read(&config.connection.identity_key_path)?[..32],
-    )?;
-
-    let connection = open_secret_connection(
-        &config.connection.host,
-        config.connection.port,
-        identity_key,
-        config.connection.to_tendermint_version(),
-    )?;
-
-    match config.version {
-        ProtocolVersionConfig::V0_34 => Ok(Box::new(TcpSigner::<_, VersionV0_34>::new(
-            signer,
-            connection,
-            config.chain_id,
-        ))),
-        ProtocolVersionConfig::V0_37 => Ok(Box::new(TcpSigner::<_, VersionV0_37>::new(
-            signer,
-            connection,
-            config.chain_id,
-        ))),
-        ProtocolVersionConfig::V0_38 => Ok(Box::new(TcpSigner::<_, VersionV0_38>::new(
-            signer,
-            connection,
-            config.chain_id,
-        ))),
-        ProtocolVersionConfig::V1_0 => Ok(Box::new(TcpSigner::<_, VersionV1_0>::new(
-            signer,
-            connection,
-            config.chain_id,
-        ))),
-    }
-}
+use signer::Signer;
+use std::net::TcpStream;
+use std::thread::sleep;
+use std::time::Duration;
+use tendermint_p2p::secret_connection::SecretConnection;
+use versions::{VersionV0_34, VersionV0_37, VersionV0_38, VersionV1_0};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config_path = std::env::args()
         .nth(1)
         .unwrap_or_else(|| "config.toml".to_string());
-
     let config = Config::from_file(&config_path)?;
 
     println!("Loading config from: {}", config_path);
@@ -75,8 +30,89 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.connection.host, config.connection.port
     );
 
-    let mut signer = create_signer(config)?;
-    signer.run()?;
+    let backend = NativeSigner::from_key_file(&config.private_key_path)?;
+
+    let identity_key = ed25519_consensus::SigningKey::try_from(
+        &std::fs::read(&config.connection.identity_key_path)?[..32],
+    )?;
+
+    let conn = open_secret_connection(
+        &config.connection.host,
+        config.connection.port,
+        identity_key,
+        config.connection.to_tendermint_version(),
+    )?;
+
+    println!("Starting request loop for chain: {}", config.chain_id);
+
+    match config.version {
+        ProtocolVersionConfig::V0_34 => {
+            let mut signer = Signer::<NativeSigner, VersionV0_34, SecretConnection<TcpStream>>::new(
+                backend,
+                conn,
+                config.chain_id,
+            );
+            run_signer_loop(&mut signer)?;
+        }
+        ProtocolVersionConfig::V0_37 => {
+            let mut signer = Signer::<NativeSigner, VersionV0_37, SecretConnection<TcpStream>>::new(
+                backend,
+                conn,
+                config.chain_id,
+            );
+            run_signer_loop(&mut signer)?;
+        }
+        ProtocolVersionConfig::V0_38 => {
+            let mut signer = Signer::<NativeSigner, VersionV0_38, SecretConnection<TcpStream>>::new(
+                backend,
+                conn,
+                config.chain_id,
+            );
+            run_signer_loop(&mut signer)?;
+        }
+        ProtocolVersionConfig::V1_0 => {
+            let mut signer = Signer::<NativeSigner, VersionV1_0, SecretConnection<TcpStream>>::new(
+                backend,
+                conn,
+                config.chain_id,
+            );
+            run_signer_loop(&mut signer)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn run_signer_loop<
+    T: SigningBackend,
+    V: versions::ProtocolVersion,
+    C: std::io::Read + std::io::Write,
+>(
+    signer: &mut Signer<T, V, C>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    loop {
+        match handle_single_request(signer) {
+            Ok(()) => {}
+            Err(e) => {
+                eprintln!("Error handling request: {}. Continuing...", e);
+                sleep(Duration::from_millis(100));
+            }
+        }
+    }
+}
+
+fn handle_single_request<
+    T: SigningBackend,
+    V: versions::ProtocolVersion,
+    C: std::io::Read + std::io::Write,
+>(
+    signer: &mut Signer<T, V, C>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let req = signer.read_request()?;
+    println!("Received request: {:?}", req);
+
+    let resp = signer.process_request(req)?;
+    signer.send_response(resp)?;
 
     Ok(())
 }
