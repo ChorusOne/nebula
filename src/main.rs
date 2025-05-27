@@ -9,6 +9,7 @@ mod versions;
 use backend::{NativeSigner, SigningBackend};
 use config::{Config, ProtocolVersionConfig};
 use connection::open_secret_connection;
+use log::{error, info};
 use signer::Signer;
 use std::net::TcpStream;
 use std::thread::sleep;
@@ -22,10 +23,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|| "config.toml".to_string());
     let config = Config::from_file(&config_path)?;
 
-    println!("Loading config from: {}", config_path);
-    println!("Chain ID: {}", config.chain_id);
-    println!("Protocol version: {:?}", config.version);
-    println!(
+    info!("Loading config from: {}", config_path);
+    info!("Chain ID: {}", config.chain_id);
+    info!("Protocol version: {:?}", config.version);
+    info!(
         "Connecting to {}:{}",
         config.connection.host, config.connection.port
     );
@@ -43,7 +44,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.connection.to_tendermint_version(),
     )?;
 
-    println!("Starting request loop for chain: {}", config.chain_id);
+    info!("Starting request loop for chain: {}", config.chain_id);
 
     match config.version {
         ProtocolVersionConfig::V0_34 => {
@@ -94,7 +95,7 @@ fn run_signer_loop<
         match handle_single_request(signer) {
             Ok(()) => {}
             Err(e) => {
-                eprintln!("Error handling request: {}. Continuing...", e);
+                error!("Error handling request: {}. Continuing...", e);
                 sleep(Duration::from_millis(100));
             }
         }
@@ -109,7 +110,7 @@ pub fn handle_single_request<
     signer: &mut Signer<T, V, C>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let req = signer.read_request()?;
-    println!("Received request: {:?}", req);
+    info!("Received request: {:?}", req);
 
     let resp = signer.process_request(req)?;
     signer.send_response(resp)?;

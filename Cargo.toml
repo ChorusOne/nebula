@@ -4,20 +4,17 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-pbjson = "0.7"
 prost = "0.13"
 prost-types = "0.13"
 serde = { version = "1.0", features = ["derive"] }
 chrono = { version = "0.4", features = ["serde"] }
-tracing = "0.1.41"
 ed25519-dalek = "2.1.1"
-tracing-subscriber = "0.3.19"
 tendermint-p2p = "0.40.4"
 ed25519-consensus = "2.1.0"
 rand_core = { version = "0.6.4"}
-anyhow = "1.0.98"
 toml = "0.8.22"
 base64 = "0.22.1"
+log = "0.4.27"
 
 
 [build-dependencies]
