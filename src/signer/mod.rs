@@ -91,15 +91,7 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
             }
 
             buf.truncate(buf_read);
-            let chunk_len = buf.len();
             self.read_buffer.extend_from_slice(&buf);
-
-            // this was the last chunk, and if we still can't decode, the message is malformed
-            if chunk_len < 1024 {
-                if V::Message::decode_length_delimited(self.read_buffer.as_ref()).is_err() {
-                    return Err(Box::new(SignerError::InvalidData));
-                }
-            }
         }
     }
 
