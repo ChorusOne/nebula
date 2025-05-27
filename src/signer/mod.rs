@@ -76,18 +76,14 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
         Ok(request)
     }
 
-    fn try_read_complete_message(
-        &self,
-        buffer: &[u8],
-    ) -> Result<(Vec<u8>, usize), InsufficientData> {
+    fn try_read_complete_message(&self, buffer: &[u8]) -> Result<usize, InsufficientData> {
         match V::Message::decode_length_delimited(buffer) {
             Ok(decoded_message) => {
                 let message_len = decoded_message.encoded_len();
                 let length_delimiter_len = prost::length_delimiter_len(message_len);
                 let total_consumed = length_delimiter_len + message_len;
 
-                let result = buffer[..total_consumed].to_vec();
-                Ok((result, total_consumed))
+                Ok(total_consumed)
             }
             Err(_) => Err(InsufficientData::NeedMoreBytes),
         }
@@ -96,10 +92,11 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
     fn read_complete_message(&mut self) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
         loop {
             match self.try_read_complete_message(&self.read_buffer) {
-                Ok((message, consumed)) => {
-                    self.read_buffer.drain(..consumed);
+                Ok(consumed) => {
+                    let message = self.read_buffer.drain(..consumed).collect();
                     return Ok(message);
                 }
+
                 Err(InsufficientData::NeedMoreBytes) => {
                     // message is not yet over, continue reading
                 }

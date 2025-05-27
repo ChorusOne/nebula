@@ -5,7 +5,7 @@ use crate::signer::{Request, Response};
 use crate::versions::VersionV0_38;
 use nebula::proto::v0_38;
 use prost::Message;
-use std::io::{Cursor, Read, Write};
+use std::io::Cursor;
 
 struct Dummy;
 
@@ -59,28 +59,28 @@ fn truncated_stream() {
 
 #[test]
 fn normal_stream() {
-    let s = TestSigner::new(Dummy, Cursor::new(vec![]), "test-chain".into());
+    let mut s = TestSigner::new(
+        Dummy,
+        Cursor::new(create_ping_message()),
+        "test-chain".into(),
+    );
     let ping_data = create_ping_message();
 
-    let result = s.try_read_complete_message(&ping_data);
-    assert!(result.is_ok());
-    let (message, consumed) = result.unwrap();
-    assert_eq!(message, ping_data);
-    assert_eq!(consumed, ping_data.len());
+    let result = s.read_complete_message();
+    let res2 = result.unwrap();
+    assert_eq!(res2, ping_data);
 }
 
 #[test]
 fn additional_data() {
-    let s = TestSigner::new(Dummy, Cursor::new(vec![]), "test-chain".into());
+    let mut s = TestSigner::new(Dummy, Cursor::new(vec![]), "test-chain".into());
     let ping1 = create_ping_message();
     let ping2 = create_ping_message();
     let combined = [ping1.clone(), ping2].concat();
+    s.read_buffer = combined;
 
-    let result = s.try_read_complete_message(&combined);
-    assert!(result.is_ok());
-    let (message, consumed) = result.unwrap();
-    assert_eq!(message, ping1);
-    assert_eq!(consumed, ping1.len());
+    let result = s.read_complete_message();
+    assert_eq!(result.unwrap(), ping1);
 }
 
 #[test]
