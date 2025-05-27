@@ -1,5 +1,6 @@
 use ed25519_consensus::SigningKey;
 use log::{error, info};
+use nebula::SignerError;
 use std::net::TcpStream;
 use std::thread::sleep;
 use std::time::Duration;
@@ -10,7 +11,7 @@ pub fn open_secret_connection(
     port: u16,
     identity_key: SigningKey,
     protocol_version: secret_connection::Version,
-) -> Result<SecretConnection<TcpStream>, Box<dyn std::error::Error>> {
+) -> Result<SecretConnection<TcpStream>, SignerError> {
     loop {
         let socket = match TcpStream::connect(format!("{host}:{port}")) {
             Ok(s) => s,
@@ -24,9 +25,10 @@ pub fn open_secret_connection(
             }
         };
 
-        let timeout_duration = Duration::from_secs(1);
-        socket.set_read_timeout(Some(timeout_duration))?;
-        socket.set_write_timeout(Some(timeout_duration))?;
+        // // let timeout_duration = Duration::from_secs(1);
+        // // socket.set_read_timeout(Some(timeout_duration))?;
+        // // socket.set_write_timeout(Some(timeout_duration))?;
+        // socket.set_nonblocking(false)?;
 
         match SecretConnection::new(socket, identity_key.clone(), protocol_version) {
             Ok(conn) => {

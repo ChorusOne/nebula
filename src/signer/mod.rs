@@ -1,23 +1,12 @@
 use crate::backend::SigningBackend;
 use crate::protocol::{Request, Response};
+use crate::types::BufferError;
 use crate::versions::ProtocolVersion;
 use nebula::SignerError;
 use prost::Message as _;
 use std::io::{Read, Write};
 use std::marker::PhantomData;
 
-#[derive(Debug)]
-pub enum InsufficientData {
-    NeedMoreBytes,
-}
-
-impl std::fmt::Display for InsufficientData {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Need more data to complete message")
-    }
-}
-
-impl std::error::Error for InsufficientData {}
 pub struct Signer<T: SigningBackend, V: ProtocolVersion, C: Read + Write> {
     signer: T,
     connection: C,
@@ -47,37 +36,39 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
             V::PubKeyResponse,
             V::PingResponse,
         >,
-        Box<dyn std::error::Error>,
+        SignerError,
     > {
         let response = match request {
             Request::SignProposal(proposal) => {
                 let signable_data = V::proposal_to_bytes(&proposal, &self.chain_id)?;
                 let signature = self.signer.sign(&signable_data);
-                Response::SignedProposal(V::create_signed_proposal_response(signature, None))
+                Response::SignedProposal(V::create_signed_proposal_response(
+                    &proposal, signature, None,
+                ))
             }
             Request::SignVote(vote) => {
                 let signable_data = V::vote_to_bytes(&vote, &self.chain_id)?;
                 let signature = self.signer.sign(&signable_data);
-                Response::SignedVote(V::create_signed_vote_response(signature, None))
+                Response::SignedVote(V::create_signed_vote_response(&vote, signature, None))
             }
             Request::ShowPublicKey => {
                 let public_key = self.signer.public_key();
                 Response::PublicKey(V::create_pub_key_response(public_key))
             }
-            Request::PingRequest => Response::Ping(V::create_ping_response()),
+            Request::Ping => Response::Ping(V::create_ping_response()),
         };
 
         Ok(response)
     }
 
-    pub fn read_request(&mut self) -> Result<Request, Box<dyn std::error::Error>> {
+    pub fn read_request(&mut self) -> Result<Request, SignerError> {
         let msg_bytes = self.read_complete_message()?;
         let (request, _chain_id) = V::parse_request(msg_bytes)?;
         Ok(request)
     }
 
     // lifetime here is probably not needed. we'd need it if we returned something referencing the buffer
-    fn try_read_complete_message(&self, buffer: &[u8]) -> Result<usize, InsufficientData> {
+    fn try_read_complete_message(&self, buffer: &[u8]) -> Result<usize, BufferError> {
         match V::Message::decode_length_delimited(buffer) {
             Ok(decoded_message) => {
                 let message_len = decoded_message.encoded_len();
@@ -86,11 +77,11 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
 
                 Ok(total_consumed)
             }
-            Err(_) => Err(InsufficientData::NeedMoreBytes),
+            Err(_) => Err(BufferError::NeedMoreBytes),
         }
     }
 
-    fn read_complete_message(&mut self) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    fn read_complete_message(&mut self) -> Result<Vec<u8>, SignerError> {
         loop {
             match self.try_read_complete_message(&self.read_buffer) {
                 Ok(consumed) => {
@@ -98,7 +89,7 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
                     return Ok(message);
                 }
 
-                Err(InsufficientData::NeedMoreBytes) => {
+                Err(BufferError::NeedMoreBytes) => {
                     // message is not yet over, continue reading
                 }
             }
@@ -107,7 +98,7 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
             let buf_read = self.connection.read(&mut buf)?;
 
             if buf_read == 0 {
-                return Err(Box::new(SignerError::InvalidData));
+                return Err(SignerError::InvalidData);
             }
 
             buf.truncate(buf_read);
@@ -123,7 +114,7 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
             V::PubKeyResponse,
             V::PingResponse,
         >,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<(), SignerError> {
         let response_bytes = V::encode_response(response)?;
         self.connection.write_all(&response_bytes)?;
         self.connection.flush()?;

@@ -1,8 +1,7 @@
 use crate::Signer;
 use crate::SigningBackend;
 use crate::handle_single_request;
-use crate::signer::InsufficientData;
-use crate::signer::{Request, Response};
+use crate::types::BufferError;
 use crate::versions::VersionV0_38;
 use nebula::proto::v0_38;
 use prost::Message;
@@ -48,7 +47,7 @@ fn truncated_stream() {
 
     let partial = &ping_data[..ping_data.len() - 1];
     let result = s.try_read_complete_message(partial);
-    assert!(matches!(result, Err(InsufficientData::NeedMoreBytes)));
+    assert!(matches!(result, Err(BufferError::NeedMoreBytes)));
 }
 
 #[test]
@@ -81,7 +80,7 @@ fn additional_data() {
 fn empty_buffer() {
     let s = TestSigner::new(Dummy, Cursor::new(vec![]), "test-chain".into());
     let result = s.try_read_complete_message(&[]);
-    assert!(matches!(result, Err(InsufficientData::NeedMoreBytes)));
+    assert!(matches!(result, Err(BufferError::NeedMoreBytes)));
 }
 
 #[test]
@@ -91,7 +90,7 @@ fn partial_bodt() {
 
     let partial_len = if ping_data.len() > 2 { 2 } else { 1 };
     let result = s.try_read_complete_message(&ping_data[..partial_len]);
-    assert!(matches!(result, Err(InsufficientData::NeedMoreBytes)));
+    assert!(matches!(result, Err(BufferError::NeedMoreBytes)));
 }
 
 #[test]

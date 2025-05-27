@@ -1,6 +1,7 @@
 use super::ProtocolVersion;
 use crate::protocol::{Request, Response};
 use crate::types::{BlockId, PartSetHeader, Proposal, SignedMsgType, Vote};
+use nebula::SignerError;
 use nebula::proto::v0_38;
 use prost::Message;
 
@@ -13,25 +14,25 @@ impl ProtocolVersion for VersionV0_38 {
     type PubKeyResponse = v0_38::privval::PubKeyResponse;
     type PingResponse = v0_38::privval::PingResponse;
 
-    fn parse_request(msg_bytes: Vec<u8>) -> Result<(Request, String), Box<dyn std::error::Error>> {
+    fn parse_request(msg_bytes: Vec<u8>) -> Result<(Request, String), SignerError> {
         let msg = v0_38::privval::Message::decode_length_delimited(msg_bytes.as_ref())?;
 
         match msg.sum {
             Some(v0_38::privval::message::Sum::SignVoteRequest(req)) => {
-                let vote = req.vote.ok_or("Missing vote")?;
+                let vote = req.vote.ok_or(SignerError::InvalidData)?;
                 Ok((Request::SignVote(vote.try_into()?), req.chain_id))
             }
             Some(v0_38::privval::message::Sum::SignProposalRequest(req)) => {
-                let proposal = req.proposal.ok_or("Missing proposal")?;
+                let proposal = req.proposal.ok_or(SignerError::InvalidData)?;
                 Ok((Request::SignProposal(proposal.try_into()?), req.chain_id))
             }
             Some(v0_38::privval::message::Sum::PubKeyRequest(req)) => {
                 Ok((Request::ShowPublicKey, req.chain_id))
             }
             Some(v0_38::privval::message::Sum::PingRequest(_)) => {
-                Ok((Request::PingRequest, String::new()))
+                Ok((Request::Ping, String::new()))
             }
-            _ => Err("Unsupported message type".into()),
+            _ => Err(SignerError::UnsupportedMessageType),
         }
     }
 
@@ -42,7 +43,7 @@ impl ProtocolVersion for VersionV0_38 {
             Self::PubKeyResponse,
             Self::PingResponse,
         >,
-    ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<u8>, SignerError> {
         let mut buf = Vec::new();
         let msg = match response {
             Response::SignedVote(resp) => v0_38::privval::message::Sum::SignedVoteResponse(resp),
@@ -56,10 +57,7 @@ impl ProtocolVersion for VersionV0_38 {
         Ok(buf)
     }
 
-    fn proposal_to_bytes(
-        proposal: &Proposal,
-        chain_id: &str,
-    ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    fn proposal_to_bytes(proposal: &Proposal, chain_id: &str) -> Result<Vec<u8>, SignerError> {
         let canonical = v0_38::types::CanonicalProposal {
             r#type: proposal.msg_type as i32,
             height: proposal.height,
@@ -89,7 +87,7 @@ impl ProtocolVersion for VersionV0_38 {
         Ok(bytes)
     }
 
-    fn vote_to_bytes(vote: &Vote, chain_id: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    fn vote_to_bytes(vote: &Vote, chain_id: &str) -> Result<Vec<u8>, SignerError> {
         let canonical = v0_38::types::CanonicalVote {
             r#type: vote.msg_type as i32,
             height: vote.height,
@@ -119,6 +117,7 @@ impl ProtocolVersion for VersionV0_38 {
     }
 
     fn create_signed_proposal_response(
+        proposal: &Proposal,
         signature: Vec<u8>,
         error: Option<String>,
     ) -> Self::SignedProposalResponse {
@@ -132,11 +131,23 @@ impl ProtocolVersion for VersionV0_38 {
     }
 
     fn create_signed_vote_response(
+        vote: &Vote,
         signature: Vec<u8>,
         error: Option<String>,
     ) -> Self::SignedVoteResponse {
         v0_38::privval::SignedVoteResponse {
-            vote: None,
+            vote: Some(nebula::proto::v1::types::Vote {
+                r#type: todo!(),
+                height: todo!(),
+                round: todo!(),
+                block_id: todo!(),
+                timestamp: todo!(),
+                validator_address: todo!(),
+                validator_index: todo!(),
+                signature: signature.into(),
+                extension: todo!(),
+                extension_signature: todo!(),
+            }),
             error: error.map(|e| v0_38::privval::RemoteSignerError {
                 code: 1,
                 description: e,
@@ -159,7 +170,7 @@ impl ProtocolVersion for VersionV0_38 {
 }
 
 impl TryFrom<v0_38::types::Vote> for Vote {
-    type Error = Box<dyn std::error::Error>;
+    type Error = SignerError;
 
     fn try_from(vote: v0_38::types::Vote) -> Result<Self, Self::Error> {
         Ok(Vote {
@@ -190,7 +201,7 @@ impl TryFrom<v0_38::types::Vote> for Vote {
 }
 
 impl TryFrom<v0_38::types::Proposal> for Proposal {
-    type Error = Box<dyn std::error::Error>;
+    type Error = SignerError;
 
     fn try_from(proposal: v0_38::types::Proposal) -> Result<Self, Self::Error> {
         Ok(Proposal {

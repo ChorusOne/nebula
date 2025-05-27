@@ -1,9 +1,7 @@
 use super::backend::SigningBackend;
-use base64::{
-    Engine as _, alphabet,
-    engine::{self, general_purpose},
-};
-use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
+use base64::{Engine as _, engine::general_purpose};
+use ed25519_dalek::{Signer, SigningKey};
+use nebula::SignerError;
 use std::fs;
 use std::path::Path;
 
@@ -12,14 +10,14 @@ pub struct NativeSigner {
 }
 
 impl NativeSigner {
-    pub fn from_key_file<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn from_key_file<P: AsRef<Path>>(path: P) -> Result<Self, SignerError> {
         let key_string = fs::read_to_string(path)?.trim().to_string();
         let key_bytes = general_purpose::STANDARD.decode(key_string)?;
 
         let signing_key = if key_bytes.len() == 32 || key_bytes.len() == 64 {
             SigningKey::from(<[u8; 32]>::try_from(&key_bytes[..32])?)
         } else {
-            return Err(format!("Invalid key size, length: {}", key_bytes.len()).into());
+            return Err(SignerError::TODO);
         };
 
         Ok(Self { signing_key })

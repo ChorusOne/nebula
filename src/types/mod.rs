@@ -1,3 +1,5 @@
+use thiserror::Error;
+
 #[derive(Debug, Clone)]
 pub struct BlockId {
     pub hash: Vec<u8>,
@@ -39,4 +41,10 @@ pub struct Proposal {
     pub timestamp: Option<i64>,
     pub pol_round: i64,
     pub block_id: Option<BlockId>,
+}
+
+#[derive(Debug, Error)]
+pub enum BufferError {
+    #[error("Insufficient amount of bytes in the buffer")]
+    NeedMoreBytes,
 }

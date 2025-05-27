@@ -6,6 +6,7 @@ pub mod v0_37;
 pub mod v0_38;
 pub mod v1_0;
 
+use nebula::SignerError;
 pub use v0_34::VersionV0_34;
 pub use v0_37::VersionV0_37;
 pub use v0_38::VersionV0_38;
@@ -18,7 +19,7 @@ pub trait ProtocolVersion {
     type PubKeyResponse;
     type PingResponse;
 
-    fn parse_request(msg: Vec<u8>) -> Result<(Request, String), Box<dyn std::error::Error>>;
+    fn parse_request(msg: Vec<u8>) -> Result<(Request, String), SignerError>;
     fn encode_response(
         response: Response<
             Self::SignedProposalResponse,
@@ -26,17 +27,16 @@ pub trait ProtocolVersion {
             Self::PubKeyResponse,
             Self::PingResponse,
         >,
-    ) -> Result<Vec<u8>, Box<dyn std::error::Error>>;
-    fn proposal_to_bytes(
-        proposal: &Proposal,
-        chain_id: &str,
-    ) -> Result<Vec<u8>, Box<dyn std::error::Error>>;
-    fn vote_to_bytes(vote: &Vote, chain_id: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>>;
+    ) -> Result<Vec<u8>, SignerError>;
+    fn proposal_to_bytes(proposal: &Proposal, chain_id: &str) -> Result<Vec<u8>, SignerError>;
+    fn vote_to_bytes(vote: &Vote, chain_id: &str) -> Result<Vec<u8>, SignerError>;
     fn create_signed_proposal_response(
+        proposal: &Proposal,
         signature: Vec<u8>,
         error: Option<String>,
     ) -> Self::SignedProposalResponse;
     fn create_signed_vote_response(
+        vote: &Vote,
         signature: Vec<u8>,
         error: Option<String>,
     ) -> Self::SignedVoteResponse;

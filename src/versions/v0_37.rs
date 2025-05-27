@@ -1,3 +1,5 @@
+use nebula::SignerError;
+
 use super::ProtocolVersion;
 use crate::protocol::{Request, Response};
 use crate::types::{Proposal, Vote};
@@ -11,7 +13,7 @@ impl ProtocolVersion for VersionV0_37 {
     type PubKeyResponse = ();
     type PingResponse = ();
 
-    fn parse_request(_msg_bytes: Vec<u8>) -> Result<(Request, String), Box<dyn std::error::Error>> {
+    fn parse_request(_msg_bytes: Vec<u8>) -> Result<(Request, String), SignerError> {
         todo!("0.37 ")
     }
 
@@ -22,22 +24,20 @@ impl ProtocolVersion for VersionV0_37 {
             Self::PubKeyResponse,
             Self::PingResponse,
         >,
-    ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<u8>, SignerError> {
         todo!("v0.37")
     }
 
-    fn proposal_to_bytes(
-        _proposal: &Proposal,
-        _chain_id: &str,
-    ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    fn proposal_to_bytes(_proposal: &Proposal, _chain_id: &str) -> Result<Vec<u8>, SignerError> {
         todo!("0.37")
     }
 
-    fn vote_to_bytes(_vote: &Vote, _chain_id: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    fn vote_to_bytes(_vote: &Vote, _chain_id: &str) -> Result<Vec<u8>, SignerError> {
         todo!("0.37")
     }
 
     fn create_signed_proposal_response(
+        proposal: &Proposal,
         _signature: Vec<u8>,
         _error: Option<String>,
     ) -> Self::SignedProposalResponse {
@@ -45,6 +45,7 @@ impl ProtocolVersion for VersionV0_37 {
     }
 
     fn create_signed_vote_response(
+        vote: &Vote,
         _signature: Vec<u8>,
         _error: Option<String>,
     ) -> Self::SignedVoteResponse {

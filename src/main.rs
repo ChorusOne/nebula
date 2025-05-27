@@ -10,6 +10,7 @@ use backend::{NativeSigner, SigningBackend};
 use config::{Config, ProtocolVersionConfig};
 use connection::open_secret_connection;
 use log::{error, info};
+use nebula::SignerError;
 use signer::Signer;
 use std::net::TcpStream;
 use std::thread::sleep;
@@ -17,11 +18,15 @@ use std::time::Duration;
 use tendermint_p2p::secret_connection::SecretConnection;
 use versions::{VersionV0_34, VersionV0_37, VersionV0_38, VersionV1_0};
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), SignerError> {
     let config_path = std::env::args()
         .nth(1)
         .unwrap_or_else(|| "config.toml".to_string());
     let config = Config::from_file(&config_path)?;
+
+    env_logger::Builder::new()
+        .filter_level(log::LevelFilter::Info)
+        .init();
 
     info!("Loading config from: {}", config_path);
     info!("Chain ID: {}", config.chain_id);
@@ -90,7 +95,7 @@ fn run_signer_loop<
     C: std::io::Read + std::io::Write,
 >(
     signer: &mut Signer<T, V, C>,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), SignerError> {
     loop {
         match handle_single_request(signer) {
             Ok(()) => {}
@@ -108,7 +113,7 @@ pub fn handle_single_request<
     C: std::io::Read + std::io::Write,
 >(
     signer: &mut Signer<T, V, C>,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), SignerError> {
     let req = signer.read_request()?;
     info!("Received request: {:?}", req);
 
