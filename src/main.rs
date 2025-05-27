@@ -101,7 +101,7 @@ fn run_signer_loop<
     }
 }
 
-fn handle_single_request<
+pub fn handle_single_request<
     T: SigningBackend,
     V: versions::ProtocolVersion,
     C: std::io::Read + std::io::Write,

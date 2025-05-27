@@ -1,5 +1,6 @@
 use crate::Signer;
 use crate::SigningBackend;
+use crate::handle_single_request;
 use crate::signer::InsufficientData;
 use crate::signer::{Request, Response};
 use crate::versions::VersionV0_38;
@@ -37,14 +38,7 @@ fn ping_request() {
     let ping_data = create_ping_message();
     let mut s = TestSigner::new(Dummy, Cursor::new(ping_data), "test-chain".into());
 
-    let req = s.read_request().unwrap();
-    assert!(matches!(req, Request::PingRequest));
-
-    // todo: maybe process_request should be split further?
-    let resp = s.process_request(req).unwrap();
-    assert!(matches!(resp, Response::Ping(_)));
-
-    assert!(s.send_response(resp).is_ok());
+    assert!(handle_single_request(&mut s).is_ok());
 }
 
 #[test]
