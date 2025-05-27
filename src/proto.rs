@@ -11,11 +11,11 @@ pub mod cometbft {
         }
     }
 
-    pub mod p2p {
-        pub mod v1 {
-            include!("./proto/cometbft.p2p.v1.rs");
-        }
-    }
+    // pub mod p2p {
+    //     pub mod v1 {
+    //         include!("./proto/cometbft.p2p.v1.rs");
+    //     }
+    // }
 
     pub mod privval {
         pub mod v1beta1 {
@@ -44,28 +44,28 @@ pub mod cometbft {
 
 pub mod v0_34 {
     pub use crate::proto::cometbft::crypto::v1 as crypto;
-    pub use crate::proto::cometbft::p2p::v1 as p2p;
+    // pub use crate::proto::cometbft::p2p::v1 as p2p;
     pub use crate::proto::cometbft::privval::v1beta1 as privval;
     pub use crate::proto::cometbft::types::v1beta1 as types;
 }
 
 pub mod v0_37 {
     pub use crate::proto::cometbft::crypto::v1 as crypto;
-    pub use crate::proto::cometbft::p2p::v1 as p2p;
+    // pub use crate::proto::cometbft::p2p::v1 as p2p;
     pub use crate::proto::cometbft::privval::v1beta1 as privval;
     pub use crate::proto::cometbft::types::v1beta2 as types;
 }
 
 pub mod v0_38 {
     pub use crate::proto::cometbft::crypto::v1 as crypto;
-    pub use crate::proto::cometbft::p2p::v1 as p2p;
+    // pub use crate::proto::cometbft::p2p::v1 as p2p;
     pub use crate::proto::cometbft::privval::v1beta2 as privval;
     pub use crate::proto::cometbft::types::v1 as types;
 }
 
 pub mod v1 {
     pub use crate::proto::cometbft::crypto::v1 as crypto;
-    pub use crate::proto::cometbft::p2p::v1 as p2p;
+    // pub use crate::proto::cometbft::p2p::v1 as p2p;
     pub use crate::proto::cometbft::privval::v1 as privval;
     pub use crate::proto::cometbft::types::v1 as types;
 }

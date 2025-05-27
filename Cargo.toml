@@ -9,7 +9,6 @@ prost = "0.13"
 prost-types = "0.13"
 serde = { version = "1.0", features = ["derive"] }
 chrono = { version = "0.4", features = ["serde"] }
-tokio = "1.45.0"
 tracing = "0.1.41"
 url = "2.5.4"
 ed25519-dalek = "2.1.1"

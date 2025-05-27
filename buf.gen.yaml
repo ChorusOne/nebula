@@ -1,11 +1,15 @@
-version: v1
+version: v2
 plugins:
-  - plugin: buf.build/community/neoeinstein-prost:v0.4.0
-    out: src/proto
-    opt:
-      - bytes=.
-      - file_descriptor_set=true
-  - plugin: buf.build/community/neoeinstein-tonic:v0.4.1
-    out: src/proto
-    opt:
-      - compile_well_known_types=true
+ - remote: buf.build/community/neoeinstein-prost:v0.4.0
+   out: src/proto
+   include_imports: true
+   opt:
+     - bytes=.
+     - file_descriptor_set=true
+inputs:
+  - module: buf.build/cometbft/cometbft
+    paths:
+    - cometbft/crypto
+    - cometbft/privval
+    - cometbft/types
+    - cometbft/version
