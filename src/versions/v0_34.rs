@@ -37,7 +37,7 @@ impl ProtocolVersion for VersionV0_34 {
     }
 
     fn create_signed_proposal_response(
-        proposal: Proposal,
+        _proposal: Proposal,
         _signature: Vec<u8>,
         _error: Option<String>,
     ) -> Self::SignedProposalResponse {
@@ -45,7 +45,7 @@ impl ProtocolVersion for VersionV0_34 {
     }
 
     fn create_signed_vote_response(
-        vote: Vote,
+        _vote: Vote,
         _signature: Vec<u8>,
         _error: Option<String>,
     ) -> Self::SignedVoteResponse {
