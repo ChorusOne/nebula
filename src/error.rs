@@ -34,6 +34,9 @@ pub enum SignerError {
 
     #[error("Malformed config")]
     InvalidConfig,
+
+    #[error("Invalid timestamp")]
+    InvalidTimestamp,
 }
 impl From<base64::DecodeError> for SignerError {
     fn from(b64_error: base64::DecodeError) -> SignerError {

@@ -4,7 +4,7 @@ version = "v0_38"
 # version = "v1_0"
 
 [connection]
-host = "127.0.0.1"
-port = 26658
+host = "192.168.0.5"
+port = 26558
 identity_key_path = "./privkey"
 secret_connection_version = "v0_34"

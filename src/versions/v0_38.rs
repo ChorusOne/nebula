@@ -1,6 +1,7 @@
 use super::ProtocolVersion;
 use crate::protocol::{Request, Response};
 use crate::types::{BlockId, PartSetHeader, Proposal, SignedMsgType, Vote};
+use log::info;
 use nebula::SignerError;
 use nebula::proto::v0_38;
 use prost::Message;
@@ -45,6 +46,7 @@ impl ProtocolVersion for VersionV0_38 {
         >,
     ) -> Result<Vec<u8>, SignerError> {
         let mut buf = Vec::new();
+        info!("Encoding response: {:?}", response);
         let msg = match response {
             Response::SignedVote(resp) => v0_38::privval::message::Sum::SignedVoteResponse(resp),
             Response::SignedProposal(resp) => {
@@ -83,13 +85,13 @@ impl ProtocolVersion for VersionV0_38 {
         };
 
         let mut bytes = Vec::new();
-        canonical.encode(&mut bytes)?;
+        canonical.encode_length_delimited(&mut bytes)?;
         Ok(bytes)
     }
 
     fn vote_to_bytes(vote: &Vote, chain_id: &str) -> Result<Vec<u8>, SignerError> {
         let canonical = v0_38::types::CanonicalVote {
-            r#type: vote.msg_type as i32,
+            r#type: vote.step as i32,
             height: vote.height,
             round: vote.round,
             block_id: vote
@@ -112,17 +114,34 @@ impl ProtocolVersion for VersionV0_38 {
         };
 
         let mut bytes = Vec::new();
-        canonical.encode(&mut bytes)?;
+        canonical.encode_length_delimited(&mut bytes)?;
         Ok(bytes)
     }
 
     fn create_signed_proposal_response(
-        proposal: &Proposal,
+        proposal: Proposal,
         signature: Vec<u8>,
         error: Option<String>,
     ) -> Self::SignedProposalResponse {
         v0_38::privval::SignedProposalResponse {
-            proposal: None,
+            proposal: Some(v0_38::types::Proposal {
+                r#type: proposal.msg_type as i32,
+                height: proposal.height,
+                round: proposal.round as i32,
+                pol_round: proposal.pol_round as i32,
+                block_id: proposal.block_id.map(|id| v0_38::types::BlockId {
+                    hash: id.hash.into(),
+                    part_set_header: id.parts.map(|p| v0_38::types::PartSetHeader {
+                        total: p.total,
+                        hash: p.hash.into(),
+                    }),
+                }),
+                timestamp: proposal.timestamp.map(|t| prost_types::Timestamp {
+                    seconds: t / 1_000_000_000,
+                    nanos: (t % 1_000_000_000) as i32,
+                }),
+                signature: signature.into(),
+            }),
             error: error.map(|e| v0_38::privval::RemoteSignerError {
                 code: 1,
                 description: e,
@@ -131,22 +150,25 @@ impl ProtocolVersion for VersionV0_38 {
     }
 
     fn create_signed_vote_response(
-        vote: &Vote,
+        vote: Vote,
         signature: Vec<u8>,
         error: Option<String>,
     ) -> Self::SignedVoteResponse {
         v0_38::privval::SignedVoteResponse {
-            vote: Some(nebula::proto::v1::types::Vote {
-                r#type: todo!(),
-                height: todo!(),
-                round: todo!(),
-                block_id: todo!(),
-                timestamp: todo!(),
-                validator_address: todo!(),
-                validator_index: todo!(),
+            vote: Some(nebula::proto::v0_38::types::Vote {
+                r#type: vote.step.into(),
+                height: vote.height,
+                round: vote.round as i32,
+                block_id: Some(vote.block_id.unwrap().into()),
+                timestamp: vote.timestamp.map(|t| prost_types::Timestamp {
+                    seconds: t / 1_000_000_000,
+                    nanos: (t % 1_000_000_000) as i32,
+                }),
+                validator_address: vote.validator_address.into(),
+                validator_index: vote.validator_index,
                 signature: signature.into(),
-                extension: todo!(),
-                extension_signature: todo!(),
+                extension: vote.extension.into(),
+                extension_signature: vote.extension_signature.into(),
             }),
             error: error.map(|e| v0_38::privval::RemoteSignerError {
                 code: 1,
@@ -174,7 +196,7 @@ impl TryFrom<v0_38::types::Vote> for Vote {
 
     fn try_from(vote: v0_38::types::Vote) -> Result<Self, Self::Error> {
         Ok(Vote {
-            msg_type: match vote.r#type {
+            step: match vote.r#type {
                 1 => SignedMsgType::Prevote,
                 2 => SignedMsgType::Precommit,
                 32 => SignedMsgType::Proposal,
@@ -220,5 +242,102 @@ impl TryFrom<v0_38::types::Proposal> for Proposal {
                 }),
             }),
         })
+    }
+}
+
+// tests data we got from the current go implementation
+#[cfg(test)]
+mod tests {
+    use crate::backend::{NativeSigner, SigningBackend};
+
+    use super::*;
+    use hex;
+    use prost::Message;
+
+    fn create_test_proposal() -> Proposal {
+        let block_hash =
+            hex::decode("5b67e0b0a8ad775ec8384810bdcb2dcbf053dae67ea288c0b7bb9df367648c43")
+                .unwrap();
+        let parts_hash =
+            hex::decode("5cfdce21a1326d26fd397a31ce964b968f743c07a68e2189c95741c9debd5355")
+                .unwrap();
+
+        Proposal {
+            msg_type: SignedMsgType::Proposal,
+            height: 1,
+            round: 0,
+            timestamp: Some(1748510847683560856),
+            pol_round: -1,
+            block_id: Some(BlockId {
+                hash: block_hash,
+                parts: Some(PartSetHeader {
+                    total: 1,
+                    hash: parts_hash,
+                }),
+            }),
+        }
+    }
+
+    #[test]
+    fn test_proposal_to_bytes_matches_go_implementation() {
+        let proposal = create_test_proposal();
+        let chain_id = "testing";
+
+        let result = VersionV0_38::proposal_to_bytes(&proposal, chain_id).unwrap();
+        let hex_result = hex::encode(&result);
+
+        let expected_hex = "77082011010000000000000020ffffffffffffffffff012a480a205b67e0b0a8ad775ec8384810bdcb2dcbf053dae67ea288c0b7bb9df367648c431224080112205cfdce21a1326d26fd397a31ce964b968f743c07a68e2189c95741c9debd5355320c08ffd0e0c10610989ff9c5023a0774657374696e67";
+
+        assert_eq!(
+            hex_result, expected_hex,
+            "Encoded bytes don't match Go implementation"
+        );
+    }
+
+    #[test]
+    fn test_canonical_proposal_encoding() {
+        let expected_bytes = hex::decode("77082011010000000000000020ffffffffffffffffff012a480a205b67e0b0a8ad775ec8384810bdcb2dcbf053dae67ea288c0b7bb9df367648c431224080112205cfdce21a1326d26fd397a31ce964b968f743c07a68e2189c95741c9debd5355320c08ffd0e0c10610989ff9c5023a0774657374696e67").unwrap();
+
+        let canonical =
+            v0_38::types::CanonicalProposal::decode_length_delimited(&expected_bytes[..]).unwrap();
+
+        println!("Decoded canonical proposal:");
+        println!("  type: {}", canonical.r#type);
+        println!("  height: {}", canonical.height);
+        println!("  round: {}", canonical.round);
+        println!("  pol_round: {}", canonical.pol_round);
+
+        if let Some(ts) = &canonical.timestamp {
+            println!("  timestamp seconds: {}", ts.seconds);
+            println!("  timestamp nanos: {}", ts.nanos);
+            let total_nanos = ts.seconds as i128 * 1_000_000_000 + ts.nanos as i128;
+            println!("  timestamp total nanos: {}", total_nanos);
+        }
+
+        println!("  chain_id: {}", canonical.chain_id);
+
+        assert_eq!(canonical.r#type, 32);
+        assert_eq!(canonical.height, 1);
+        assert_eq!(canonical.round, 0);
+        assert_eq!(canonical.pol_round, -1);
+        assert_eq!(canonical.chain_id, "testing");
+    }
+
+    #[test]
+    fn test_full_signing_flow() {
+        let test_signer = NativeSigner::from_key_file("./privkey");
+
+        let proposal = create_test_proposal();
+        let chain_id = "testing";
+
+        let signable_bytes = VersionV0_38::proposal_to_bytes(&proposal, chain_id).unwrap();
+
+        let expected_hex = "77082011010000000000000020ffffffffffffffffff012a480a205b67e0b0a8ad775ec8384810bdcb2dcbf053dae67ea288c0b7bb9df367648c431224080112205cfdce21a1326d26fd397a31ce964b968f743c07a68e2189c95741c9debd5355320c08ffd0e0c10610989ff9c5023a0774657374696e67";
+        assert_eq!(hex::encode(&signable_bytes), expected_hex);
+
+        let signature = test_signer.unwrap().sign(&signable_bytes);
+        let expected_signature = "bfde0a738bbec89b2fb78b01caaf53912762d16cb78001aeae212b691f4e4d30f1a83369cd88aa4dc6384bfe3009c7cfcb54b0ef4ae0199f18e0cbbfa42d3701";
+        println!("got this signature: {}", hex::encode(&signature));
+        assert_eq!(hex::encode(&signature), expected_signature);
     }
 }

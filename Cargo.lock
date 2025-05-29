@@ -771,6 +771,7 @@ dependencies = [
  "ed25519-consensus",
  "ed25519-dalek",
  "env_logger",
+ "hex",
  "log",
  "prost",
  "prost-build",

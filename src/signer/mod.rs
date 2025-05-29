@@ -2,6 +2,7 @@ use crate::backend::SigningBackend;
 use crate::protocol::{Request, Response};
 use crate::types::BufferError;
 use crate::versions::ProtocolVersion;
+use log::info;
 use nebula::SignerError;
 use prost::Message as _;
 use std::io::{Read, Write};
@@ -42,14 +43,25 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
             Request::SignProposal(proposal) => {
                 let signable_data = V::proposal_to_bytes(&proposal, &self.chain_id)?;
                 let signature = self.signer.sign(&signable_data);
+                info!("Signature: {}", hex::encode(&signature));
+                info!("Signable data: {}", hex::encode(&signable_data));
+
                 Response::SignedProposal(V::create_signed_proposal_response(
-                    &proposal, signature, None,
+                    proposal.clone(),
+                    signature,
+                    None,
                 ))
             }
             Request::SignVote(vote) => {
                 let signable_data = V::vote_to_bytes(&vote, &self.chain_id)?;
                 let signature = self.signer.sign(&signable_data);
-                Response::SignedVote(V::create_signed_vote_response(&vote, signature, None))
+                info!("Signature: {}", hex::encode(&signature));
+                info!("Signable data: {}", hex::encode(&signable_data));
+                Response::SignedVote(V::create_signed_vote_response(
+                    vote.clone(),
+                    signature,
+                    None,
+                ))
             }
             Request::ShowPublicKey => {
                 let public_key = self.signer.public_key();

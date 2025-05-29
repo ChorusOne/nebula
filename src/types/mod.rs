@@ -6,6 +6,41 @@ pub struct BlockId {
     pub parts: Option<PartSetHeader>,
 }
 
+impl From<BlockId> for nebula::proto::v1::types::BlockId {
+    fn from(block_id: BlockId) -> nebula::proto::v1::types::BlockId {
+        nebula::proto::v1::types::BlockId {
+            hash: block_id.hash.into(),
+            part_set_header: Some(block_id.parts.unwrap().into()),
+        }
+    }
+}
+
+impl From<PartSetHeader> for nebula::proto::v1::types::PartSetHeader {
+    fn from(part_set_header: PartSetHeader) -> nebula::proto::v1::types::PartSetHeader {
+        nebula::proto::v1::types::PartSetHeader {
+            total: part_set_header.total,
+            hash: part_set_header.hash.into(),
+        }
+    }
+}
+impl From<nebula::proto::v1::types::BlockId> for BlockId {
+    fn from(block_id: nebula::proto::v1::types::BlockId) -> BlockId {
+        BlockId {
+            hash: block_id.hash.into(),
+            parts: Some(block_id.part_set_header.unwrap().into()),
+        }
+    }
+}
+
+impl From<nebula::proto::v1::types::PartSetHeader> for PartSetHeader {
+    fn from(part_set_header: nebula::proto::v1::types::PartSetHeader) -> PartSetHeader {
+        PartSetHeader {
+            total: part_set_header.total,
+            hash: part_set_header.hash.into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct PartSetHeader {
     pub total: u32,
@@ -22,7 +57,7 @@ pub enum SignedMsgType {
 
 #[derive(Debug, Clone)]
 pub struct Vote {
-    pub msg_type: SignedMsgType,
+    pub step: SignedMsgType,
     pub height: i64,
     pub round: i64,
     pub timestamp: Option<i64>,
@@ -33,6 +68,16 @@ pub struct Vote {
     pub extension_signature: Vec<u8>,
 }
 
+impl From<SignedMsgType> for i32 {
+    fn from(r#type: SignedMsgType) -> i32 {
+        match r#type {
+            SignedMsgType::Unknown => 0,
+            SignedMsgType::Prevote => 1,
+            SignedMsgType::Precommit => 2,
+            SignedMsgType::Proposal => 32,
+        }
+    }
+}
 #[derive(Debug, Clone)]
 pub struct Proposal {
     pub msg_type: SignedMsgType,

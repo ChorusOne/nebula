@@ -1,6 +1,7 @@
 use super::backend::SigningBackend;
 use base64::{Engine as _, engine::general_purpose};
-use ed25519_dalek::{Signer, SigningKey};
+use ed25519_consensus::SigningKey;
+use log::info;
 use nebula::SignerError;
 use std::fs;
 use std::path::Path;
@@ -30,6 +31,6 @@ impl SigningBackend for NativeSigner {
     }
 
     fn public_key(&self) -> Vec<u8> {
-        self.signing_key.verifying_key().to_bytes().to_vec()
+        self.signing_key.verification_key().to_bytes().to_vec()
     }
 }
