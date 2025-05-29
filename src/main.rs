@@ -125,7 +125,7 @@ pub fn handle_single_request<T: SigningBackend, V: ProtocolVersion, C: Read + Wr
     let response = match req {
         Request::SignProposal(proposal) => {
             if !should_sign_proposal(&state, &proposal) {
-                Response::SignedProposal(V::create_signed_proposal_response(
+                Response::SignedProposal(V::create_proposal_response(
                     None,
                     Vec::new(),
                     Some("would double-sign proposal at same height/round".into()),
@@ -137,7 +137,7 @@ pub fn handle_single_request<T: SigningBackend, V: ProtocolVersion, C: Read + Wr
 
         Request::SignVote(vote) => {
             if !should_sign_vote(&state, &vote) {
-                Response::SignedVote(V::create_signed_vote_response(
+                Response::SignedVote(V::create_vote_response(
                     None,
                     Vec::new(),
                     Some("would double-sign vote at same height/round".into()),

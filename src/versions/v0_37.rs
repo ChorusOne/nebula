@@ -8,8 +8,8 @@ pub struct VersionV0_37;
 
 impl ProtocolVersion for VersionV0_37 {
     type Message = ();
-    type SignedProposalResponse = ();
-    type SignedVoteResponse = ();
+    type ProposalResponse = ();
+    type VoteResponse = ();
     type PubKeyResponse = ();
     type PingResponse = ();
 
@@ -19,8 +19,8 @@ impl ProtocolVersion for VersionV0_37 {
 
     fn encode_response(
         _response: Response<
-            Self::SignedProposalResponse,
-            Self::SignedVoteResponse,
+            Self::ProposalResponse,
+            Self::VoteResponse,
             Self::PubKeyResponse,
             Self::PingResponse,
         >,
@@ -36,19 +36,19 @@ impl ProtocolVersion for VersionV0_37 {
         todo!("0.37")
     }
 
-    fn create_signed_proposal_response(
+    fn create_proposal_response(
         _proposal: Option<Proposal>,
         _signature: Vec<u8>,
         _error: Option<String>,
-    ) -> Self::SignedProposalResponse {
+    ) -> Self::ProposalResponse {
         todo!()
     }
 
-    fn create_signed_vote_response(
+    fn create_vote_response(
         _vote: Option<Vote>,
         _signature: Vec<u8>,
         _error: Option<String>,
-    ) -> Self::SignedVoteResponse {
+    ) -> Self::VoteResponse {
         todo!()
     }
 

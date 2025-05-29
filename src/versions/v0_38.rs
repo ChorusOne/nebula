@@ -9,8 +9,8 @@ pub struct VersionV0_38;
 
 impl ProtocolVersion for VersionV0_38 {
     type Message = v0_38::privval::Message;
-    type SignedProposalResponse = v0_38::privval::SignedProposalResponse;
-    type SignedVoteResponse = v0_38::privval::SignedVoteResponse;
+    type ProposalResponse = v0_38::privval::SignedProposalResponse;
+    type VoteResponse = v0_38::privval::SignedVoteResponse;
     type PubKeyResponse = v0_38::privval::PubKeyResponse;
     type PingResponse = v0_38::privval::PingResponse;
 
@@ -38,8 +38,8 @@ impl ProtocolVersion for VersionV0_38 {
 
     fn encode_response(
         response: Response<
-            Self::SignedProposalResponse,
-            Self::SignedVoteResponse,
+            Self::ProposalResponse,
+            Self::VoteResponse,
             Self::PubKeyResponse,
             Self::PingResponse,
         >,
@@ -116,11 +116,11 @@ impl ProtocolVersion for VersionV0_38 {
         Ok(bytes)
     }
 
-    fn create_signed_proposal_response(
+    fn create_proposal_response(
         proposal: Option<Proposal>,
         signature: Vec<u8>,
         error: Option<String>,
-    ) -> Self::SignedProposalResponse {
+    ) -> Self::ProposalResponse {
         v0_38::privval::SignedProposalResponse {
             proposal: proposal.map(|proposal| v0_38::types::Proposal {
                 r#type: proposal.msg_type as i32,
@@ -147,11 +147,11 @@ impl ProtocolVersion for VersionV0_38 {
         }
     }
 
-    fn create_signed_vote_response(
+    fn create_vote_response(
         vote: Option<Vote>,
         signature: Vec<u8>,
         error: Option<String>,
-    ) -> Self::SignedVoteResponse {
+    ) -> Self::VoteResponse {
         v0_38::privval::SignedVoteResponse {
             vote: vote.map(|vote| nebula::proto::v0_38::types::Vote {
                 r#type: vote.step.into(),

@@ -31,12 +31,7 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
         &self,
         request: Request,
     ) -> Result<
-        Response<
-            V::SignedProposalResponse,
-            V::SignedVoteResponse,
-            V::PubKeyResponse,
-            V::PingResponse,
-        >,
+        Response<V::ProposalResponse, V::VoteResponse, V::PubKeyResponse, V::PingResponse>,
         SignerError,
     > {
         let response = match request {
@@ -46,7 +41,7 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
                 info!("Signature: {}", hex::encode(&signature));
                 info!("Signable data: {}", hex::encode(&signable_data));
 
-                Response::SignedProposal(V::create_signed_proposal_response(
+                Response::SignedProposal(V::create_proposal_response(
                     Some(proposal.clone()),
                     signature,
                     None,
@@ -57,11 +52,7 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
                 let signature = self.signer.sign(&signable_data);
                 info!("Signature: {}", hex::encode(&signature));
                 info!("Signable data: {}", hex::encode(&signable_data));
-                Response::SignedVote(V::create_signed_vote_response(
-                    Some(vote.clone()),
-                    signature,
-                    None,
-                ))
+                Response::SignedVote(V::create_vote_response(Some(vote.clone()), signature, None))
             }
             Request::ShowPublicKey => {
                 let public_key = self.signer.public_key();
@@ -121,8 +112,8 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
     pub fn send_response(
         &mut self,
         response: Response<
-            V::SignedProposalResponse,
-            V::SignedVoteResponse,
+            V::ProposalResponse,
+            V::VoteResponse,
             V::PubKeyResponse,
             V::PingResponse,
         >,
