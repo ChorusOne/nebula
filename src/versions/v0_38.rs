@@ -1,7 +1,6 @@
 use super::ProtocolVersion;
 use crate::protocol::{Request, Response};
 use crate::types::{BlockId, PartSetHeader, Proposal, SignedMsgType, Vote};
-use log::info;
 use nebula::SignerError;
 use nebula::proto::v0_38;
 use prost::Message;
@@ -46,7 +45,6 @@ impl ProtocolVersion for VersionV0_38 {
         >,
     ) -> Result<Vec<u8>, SignerError> {
         let mut buf = Vec::new();
-        info!("Encoding response: {:?}", response);
         let msg = match response {
             Response::SignedVote(resp) => v0_38::privval::message::Sum::SignedVoteResponse(resp),
             Response::SignedProposal(resp) => {
@@ -119,14 +117,14 @@ impl ProtocolVersion for VersionV0_38 {
     }
 
     fn create_signed_proposal_response(
-        proposal: Proposal,
+        proposal: Option<Proposal>,
         signature: Vec<u8>,
         error: Option<String>,
     ) -> Self::SignedProposalResponse {
         v0_38::privval::SignedProposalResponse {
-            proposal: Some(v0_38::types::Proposal {
+            proposal: proposal.map(|proposal| v0_38::types::Proposal {
                 r#type: proposal.msg_type as i32,
-                height: proposal.height,
+                height: proposal.height as i64,
                 round: proposal.round as i32,
                 pol_round: proposal.pol_round as i32,
                 block_id: proposal.block_id.map(|id| v0_38::types::BlockId {
@@ -142,24 +140,24 @@ impl ProtocolVersion for VersionV0_38 {
                 }),
                 signature: signature.into(),
             }),
-            error: error.map(|e| v0_38::privval::RemoteSignerError {
+            error: error.map(|desc| v0_38::privval::RemoteSignerError {
                 code: 1,
-                description: e,
+                description: desc,
             }),
         }
     }
 
     fn create_signed_vote_response(
-        vote: Vote,
+        vote: Option<Vote>,
         signature: Vec<u8>,
         error: Option<String>,
     ) -> Self::SignedVoteResponse {
         v0_38::privval::SignedVoteResponse {
-            vote: Some(nebula::proto::v0_38::types::Vote {
+            vote: vote.map(|vote| nebula::proto::v0_38::types::Vote {
                 r#type: vote.step.into(),
                 height: vote.height,
                 round: vote.round as i32,
-                block_id: Some(vote.block_id.unwrap().into()),
+                block_id: vote.block_id.map(|id| id.into()),
                 timestamp: vote.timestamp.map(|t| prost_types::Timestamp {
                     seconds: t / 1_000_000_000,
                     nanos: (t % 1_000_000_000) as i32,
@@ -170,9 +168,9 @@ impl ProtocolVersion for VersionV0_38 {
                 extension: vote.extension.into(),
                 extension_signature: vote.extension_signature.into(),
             }),
-            error: error.map(|e| v0_38::privval::RemoteSignerError {
+            error: error.map(|desc| v0_38::privval::RemoteSignerError {
                 code: 1,
-                description: e,
+                description: desc,
             }),
         }
     }

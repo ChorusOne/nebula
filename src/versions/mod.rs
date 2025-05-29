@@ -31,12 +31,12 @@ pub trait ProtocolVersion {
     fn proposal_to_bytes(proposal: &Proposal, chain_id: &str) -> Result<Vec<u8>, SignerError>;
     fn vote_to_bytes(vote: &Vote, chain_id: &str) -> Result<Vec<u8>, SignerError>;
     fn create_signed_proposal_response(
-        proposal: Proposal,
+        proposal: Option<Proposal>,
         signature: Vec<u8>,
         error: Option<String>,
     ) -> Self::SignedProposalResponse;
     fn create_signed_vote_response(
-        vote: Vote,
+        vote: Option<Vote>,
         signature: Vec<u8>,
         error: Option<String>,
     ) -> Self::SignedVoteResponse;

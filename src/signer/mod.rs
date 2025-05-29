@@ -47,7 +47,7 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
                 info!("Signable data: {}", hex::encode(&signable_data));
 
                 Response::SignedProposal(V::create_signed_proposal_response(
-                    proposal.clone(),
+                    Some(proposal.clone()),
                     signature,
                     None,
                 ))
@@ -58,7 +58,7 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
                 info!("Signature: {}", hex::encode(&signature));
                 info!("Signable data: {}", hex::encode(&signable_data));
                 Response::SignedVote(V::create_signed_vote_response(
-                    vote.clone(),
+                    Some(vote.clone()),
                     signature,
                     None,
                 ))

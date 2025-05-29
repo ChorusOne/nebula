@@ -78,6 +78,19 @@ impl From<SignedMsgType> for i32 {
         }
     }
 }
+
+// this is getting messy, probably something wrong with the types somewhere?
+impl From<u8> for SignedMsgType {
+    fn from(n: u8) -> Self {
+        match n {
+            1 => SignedMsgType::Prevote,
+            2 => SignedMsgType::Precommit,
+            32 => SignedMsgType::Proposal,
+            _ => SignedMsgType::Unknown,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Proposal {
     pub msg_type: SignedMsgType,

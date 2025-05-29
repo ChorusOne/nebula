@@ -37,6 +37,9 @@ pub enum SignerError {
 
     #[error("Invalid timestamp")]
     InvalidTimestamp,
+
+    #[error("Signer attempted double signing")]
+    DoubleSignError,
 }
 impl From<base64::DecodeError> for SignerError {
     fn from(_b64_error: base64::DecodeError) -> SignerError {

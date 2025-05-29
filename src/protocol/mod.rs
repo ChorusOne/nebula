@@ -1,6 +1,3 @@
-pub mod request;
-pub mod response;
-
 use crate::types::{Proposal, Vote};
 
 #[derive(Debug)]
