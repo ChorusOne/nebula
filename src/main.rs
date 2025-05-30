@@ -2,6 +2,7 @@ mod backend;
 mod config;
 mod connection;
 mod protocol;
+mod raft;
 mod signer;
 mod types;
 mod versions;
@@ -12,6 +13,7 @@ use connection::open_secret_connection;
 use log::{error, info};
 use nebula::SignerError;
 use protocol::{Request, Response};
+use raft::start_example_raft_node;
 use signer::Signer;
 use std::io::{Read, Write};
 use std::thread::sleep;
@@ -21,12 +23,14 @@ use tendermint_p2p::secret_connection::SecretConnection;
 use types::{Proposal, SignedMsgType, Vote};
 use versions::{ProtocolVersion, VersionV0_34, VersionV0_37, VersionV0_38, VersionV1_0};
 
-fn main() -> Result<(), SignerError> {
+#[tokio::main]
+async fn main() -> Result<(), SignerError> {
     let config_path = std::env::args()
         .nth(1)
         .unwrap_or_else(|| "config.toml".to_string());
     let config = Config::from_file(&config_path)?;
 
+    // TODO log level in config
     env_logger::Builder::new()
         .filter_level(log::LevelFilter::Info)
         .init();
@@ -39,6 +43,15 @@ fn main() -> Result<(), SignerError> {
         config.connection.host, config.connection.port
     );
 
+    let _ = start_example_raft_node(
+        52525,
+        format!("{}.db", "127.0.0.1:20012".to_string()),
+        "127.0.0.1:20011".to_string(),
+        "127.0.0.1:20012".to_string(),
+    )
+    .await;
+
+    // TODO: different backends based on config
     let backend = NativeSigner::from_key_file(&config.private_key_path)?;
 
     let identity_key = ed25519_consensus::SigningKey::try_from(
@@ -231,3 +244,32 @@ fn should_sign_vote(state: &ConsensusData, vote: &Vote) -> bool {
         _ => false,
     }
 }
+
+/*
+* func shouldSignVoteExtension(chainID string, signBz, extSignBz []byte) (bool, error) {
+   var vote cmtypes.CanonicalVote
+   if err := protoio.UnmarshalDelimited(signBz, &vote); err != nil {
+       return false, nil
+   }
+
+   if vote.Type == cmtypes.PrecommitType && vote.BlockID != nil && len(extSignBz) > 0 {
+       var ext cmtypes.CanonicalVoteExtension
+       if err := protoio.UnmarshalDelimited(extSignBz, &ext); err != nil {
+           return false, fmt.Errorf("failed to unmarshal vote extension: %w", err)
+       }
+
+       switch {
+       case ext.ChainId != chainID:
+           return false, fmt.Errorf("extension chain ID %s does not match expected %s", ext.ChainId, chainID)
+       case ext.Height != vote.Height:
+           return false, fmt.Errorf("extension height %d does not match vote height %d", ext.Height, vote.Height)
+       case ext.Round != vote.Round:
+           return false, fmt.Errorf("extension round %d does not match vote round %d", ext.Round, vote.Round)
+       }
+
+       return true, nil
+   }
+
+   return false, nil
+}
+*/

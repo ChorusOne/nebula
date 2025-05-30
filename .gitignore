@@ -1,1 +1,3 @@
 /target
+# rocksdb files with raft data
+*.db
