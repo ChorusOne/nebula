@@ -13,7 +13,7 @@ use connection::open_secret_connection;
 use log::{error, info};
 use nebula::SignerError;
 use protocol::{Request, Response};
-use raft::start_example_raft_node;
+use raft::start_raft_node;
 use signer::Signer;
 use std::io::{Read, Write};
 use std::thread::sleep;
@@ -43,7 +43,8 @@ async fn main() -> Result<(), SignerError> {
         config.connection.host, config.connection.port
     );
 
-    let _ = start_example_raft_node(
+    // TODO: cluster initialization.
+    let _ = start_raft_node(
         52525,
         format!("{}.db", "127.0.0.1:20012".to_string()),
         "127.0.0.1:20011".to_string(),
@@ -134,6 +135,7 @@ pub fn handle_single_request<T: SigningBackend, V: ProtocolVersion, C: Read + Wr
         round: 99999,
         step: SignedMsgType::Unknown,
     };
+    // ALSO: probably should bump the state before signing anything so that we can bail early if bumping state fails
 
     let response = match req {
         Request::SignProposal(proposal) => {

@@ -71,11 +71,11 @@ pub mod typ {
     pub type ClientWriteResponse = openraft::raft::ClientWriteResponse<TypeConfig>;
 }
 
-pub type ExampleRaft = openraft::Raft<TypeConfig>;
+pub type SignerRaft = openraft::Raft<TypeConfig>;
 
 type Server = tide::Server<Arc<App>>;
 
-pub async fn start_example_raft_node<P>(
+pub async fn start_raft_node<P>(
     node_id: NodeId,
     dir: P,
     http_addr: String,
