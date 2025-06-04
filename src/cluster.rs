@@ -360,10 +360,6 @@ impl Cluster {
     fn run_election(&self) {
         let mut candidates = vec![self.node_id];
 
-        {
-            let conns = self.connections.lock().unwrap();
-            candidates.extend(conns.keys().copied());
-        }
         let total_nodes = self.peers.len() + 1;
         let majority = (total_nodes / 2) + 1;
         loop {
@@ -373,6 +369,10 @@ impl Cluster {
             }
             warn!("no majority reached, connections: {}", online);
             thread::sleep(Duration::from_millis(200));
+        }
+        {
+            let conns = self.connections.lock().unwrap();
+            candidates.extend(conns.keys().copied());
         }
         info!("running election, candidates: {:?}", candidates);
         // get bullied

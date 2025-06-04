@@ -41,8 +41,14 @@ pub enum SignerError {
     #[error("Signer attempted double signing")]
     DoubleSignError,
 
-    #[error("Todo: signing")]
+    #[error("Todo: signing: {0}")]
     Other(String),
+
+    #[error("Todo: signing: {0}")]
+    VaultError(String),
+
+    #[error("Todo: signing: {0}")]
+    Crypto(String),
 }
 
 impl From<base64::DecodeError> for SignerError {
@@ -66,5 +72,23 @@ impl From<ed25519_consensus::Error> for SignerError {
 impl From<toml::de::Error> for SignerError {
     fn from(toml_error: toml::de::Error) -> SignerError {
         SignerError::InvalidConfig(toml_error)
+    }
+}
+
+impl From<serde_json::Error> for SignerError {
+    fn from(e: serde_json::Error) -> Self {
+        SignerError::Other(e.to_string())
+    }
+}
+
+impl From<reqwest::Error> for SignerError {
+    fn from(e: reqwest::Error) -> Self {
+        SignerError::Other(e.to_string())
+    }
+}
+
+impl From<reqwest::header::InvalidHeaderValue> for SignerError {
+    fn from(e: reqwest::header::InvalidHeaderValue) -> Self {
+        SignerError::Other(e.to_string())
     }
 }

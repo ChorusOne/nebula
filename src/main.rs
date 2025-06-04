@@ -7,7 +7,8 @@ mod signer;
 mod types;
 mod versions;
 
-use backend::NativeSigner;
+use crate::backend::{Ed25519Signer, SigningBackend, vault::VaultSigner};
+use crate::config::{KeyType, SigningMode};
 use cluster::{Cluster, ConsensusData};
 use config::{Config, ProtocolVersionConfig};
 use connection::open_secret_connection;
@@ -126,6 +127,8 @@ fn run_leader_loop_for_version<V: ProtocolVersion + Send + 'static>(
     });
     let consensus_state = Arc::new(Mutex::new(initial_state));
 
+    let config = Arc::new(config.clone());
+
     let mut thread_handles = Vec::with_capacity(config.connections.len());
 
     for conn_cfg in config.connections.iter() {
@@ -134,8 +137,9 @@ fn run_leader_loop_for_version<V: ProtocolVersion + Send + 'static>(
 
         let cluster_clone = Arc::clone(cluster);
         let consensus_clone = Arc::clone(&consensus_state);
-        let private_key_path = config.private_key_path.clone();
-        let chain_id = config.chain_id.clone();
+        let config_clone = Arc::clone(&config);
+        let private_key_path = config_clone.private_key_path.clone();
+        let chain_id = config_clone.chain_id.clone();
         let host_str = conn_cfg.host.clone();
         let port_num = conn_cfg.port;
 
@@ -143,26 +147,55 @@ fn run_leader_loop_for_version<V: ProtocolVersion + Send + 'static>(
             let mut retry_count = 0;
             const MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
 
-            let establish_connection = || -> Result<Signer<NativeSigner, V, _>, SignerError> {
-                info!("Connecting to CometBFT node at {}:{} …", host_str, port_num);
+            let establish_connection =
+                || -> Result<Signer<Box<dyn SigningBackend>, V, _>, SignerError> {
+                    info!("Connecting to CometBFT node at {}:{} …", host_str, port_num);
 
-                let raw_conn = open_secret_connection(
-                    &host_str,
-                    port_num,
-                    identity_key.clone(),
-                    tendermint_p2p::secret_connection::Version::V0_34,
-                )?;
+                    let raw_conn = open_secret_connection(
+                        &host_str,
+                        port_num,
+                        identity_key.clone(),
+                        tendermint_p2p::secret_connection::Version::V0_34,
+                    )?;
+                    info!(" → Connected to CometBFT at {}:{}", host_str, port_num);
 
-                info!(" → Connected to CometBFT at {}:{}", host_str, port_num);
+                    let backend: Box<dyn SigningBackend> = match config_clone.signing_mode {
+                        SigningMode::Native => {
+                            let native_cfg = config_clone.signing.native.as_ref().unwrap();
 
-                let signer = Signer::<NativeSigner, V, _>::new(
-                    NativeSigner::from_key_file(&private_key_path)?,
-                    raw_conn,
-                    chain_id.clone(),
-                );
+                            let priv_key_path = native_cfg.priv_key_path.clone();
+                            match native_cfg.key_type {
+                                KeyType::Ed25519 => {
+                                    let ed = Ed25519Signer::from_key_file(&priv_key_path)?;
+                                    Box::new(ed)
+                                }
+                                KeyType::Secp256k1 => {
+                                    // let sk = Secp256k1Signer::from_key_file(&priv_key_path)?;
+                                    // Box::new(sk)
+                                    todo!();
+                                }
+                                KeyType::Bls12_381 => {
+                                    // let bls = Bls12381Signer::from_key_file(&priv_key_path)?;
+                                    // Box::new(bls)
+                                    todo!();
+                                }
+                            }
+                        }
+                        SigningMode::Vault => {
+                            let vault_cfg = config_clone.signing.vault.as_ref().unwrap();
 
-                Ok(signer)
-            };
+                            let vs = VaultSigner::new(vault_cfg.clone())?;
+                            Box::new(vs)
+                        }
+                    };
+
+                    let signer = Signer::<Box<dyn SigningBackend>, V, _>::new(
+                        backend,
+                        raw_conn,
+                        chain_id.clone(),
+                    );
+                    Ok(signer)
+                };
 
             let mut signer_instance = establish_connection()?;
 
@@ -270,7 +303,7 @@ fn run_leader_loop_for_version<V: ProtocolVersion + Send + 'static>(
                             break;
                         }
                         if !should_sign_vote(&state_guard, &vote) {
-                            info!("prevented us from double signing a proposal at: {:?}", vote);
+                            info!("prevented us from double signing a vote at: {:?}", vote);
                             Response::SignedVote(<V as ProtocolVersion>::create_vote_response(
                                 None,
                                 Vec::new(),

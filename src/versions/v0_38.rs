@@ -276,7 +276,7 @@ impl TryFrom<v0_38::types::Proposal> for Proposal {
 // tests data we got from the current go implementation
 #[cfg(test)]
 mod tests {
-    use crate::backend::{NativeSigner, SigningBackend};
+    use crate::backend::{Ed25519Signer, SigningBackend};
 
     use super::*;
     use hex;
@@ -353,7 +353,7 @@ mod tests {
 
     #[test]
     fn test_full_signing_flow() {
-        let test_signer = NativeSigner::from_key_file("./privkey");
+        let test_signer = Ed25519Signer::from_key_file("./privkey");
 
         let proposal = create_test_proposal();
         let chain_id = "testing";
@@ -365,7 +365,8 @@ mod tests {
 
         let signature = test_signer.unwrap().sign(&signable_bytes);
         let expected_signature = "bfde0a738bbec89b2fb78b01caaf53912762d16cb78001aeae212b691f4e4d30f1a83369cd88aa4dc6384bfe3009c7cfcb54b0ef4ae0199f18e0cbbfa42d3701";
-        println!("got this signature: {}", hex::encode(&signature));
-        assert_eq!(hex::encode(&signature), expected_signature);
+        let sig = &signature.unwrap();
+        println!("got this signature: {}", hex::encode(sig));
+        assert_eq!(hex::encode(sig), expected_signature);
     }
 }
