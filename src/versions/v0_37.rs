@@ -61,7 +61,7 @@ impl ProtocolVersion for VersionV0_37 {
         todo!()
     }
 
-    fn vote_extension_to_bytes(vote: &Vote, chain_id: &str) -> Result<Vec<u8>, SignerError> {
+    fn vote_extension_to_bytes(_vote: &Vote, _chain_id: &str) -> Result<Vec<u8>, SignerError> {
         todo!()
     }
 }

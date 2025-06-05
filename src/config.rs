@@ -5,7 +5,6 @@ use std::path::PathBuf;
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Config {
-    pub private_key_path: PathBuf,
     pub chain_id: String,
     pub version: ProtocolVersionConfig,
     pub connections: Vec<ConnectionConfig>,
@@ -82,7 +81,7 @@ pub struct VaultConfig {
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct NativeConfig {
-    pub priv_key_path: PathBuf,
+    pub private_key_path: PathBuf,
 
     pub key_type: KeyType,
 }

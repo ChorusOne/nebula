@@ -5,7 +5,6 @@ use log::info;
 use nebula::SignerError;
 use nebula::proto::v0_38;
 use prost::Message;
-use prost::bytes::Bytes;
 
 pub struct VersionV0_38;
 

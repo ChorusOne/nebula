@@ -1,67 +1,268 @@
-use nebula::SignerError;
-
 use super::ProtocolVersion;
 use crate::protocol::{Request, Response};
-use crate::types::{Proposal, Vote};
+use crate::types::{BlockId, PartSetHeader, Proposal, SignedMsgType, Vote};
+use log::info;
+use nebula::SignerError;
+use nebula::proto::v1;
+use prost::Message;
 
 pub struct VersionV1_0;
 
 impl ProtocolVersion for VersionV1_0 {
-    type Message = ();
-    type ProposalResponse = ();
-    type VoteResponse = ();
-    type PubKeyResponse = ();
-    type PingResponse = ();
+    type Message = v1::privval::Message;
+    type ProposalResponse = v1::privval::SignedProposalResponse;
+    type VoteResponse = v1::privval::SignedVoteResponse;
+    type PubKeyResponse = v1::privval::PubKeyResponse;
+    type PingResponse = v1::privval::PingResponse;
 
-    fn parse_request(_msg_bytes: Vec<u8>) -> Result<(Request, String), SignerError> {
-        todo!("v1.0")
+    fn parse_request(msg_bytes: Vec<u8>) -> Result<(Request, String), SignerError> {
+        let msg = v1::privval::Message::decode_length_delimited(msg_bytes.as_ref())?;
+
+        match msg.sum {
+            Some(v1::privval::message::Sum::SignVoteRequest(req)) => {
+                let vote = req.vote.ok_or(SignerError::InvalidData)?;
+                info!("parsed vote extension: {:?}", vote.extension);
+                Ok((
+                    Request::SignVote(tendermint_vote_to_domain(vote)?),
+                    req.chain_id,
+                ))
+            }
+            Some(v1::privval::message::Sum::SignProposalRequest(req)) => {
+                let proposal = req.proposal.ok_or(SignerError::InvalidData)?;
+                Ok((
+                    Request::SignProposal(tendermint_proposal_to_domain(proposal)?),
+                    req.chain_id,
+                ))
+            }
+            Some(v1::privval::message::Sum::PubKeyRequest(req)) => {
+                Ok((Request::ShowPublicKey, req.chain_id))
+            }
+            Some(v1::privval::message::Sum::PingRequest(_)) => Ok((Request::Ping, String::new())),
+            _ => Err(SignerError::UnsupportedMessageType),
+        }
     }
 
     fn encode_response(
-        _response: Response<
+        response: Response<
             Self::ProposalResponse,
             Self::VoteResponse,
             Self::PubKeyResponse,
             Self::PingResponse,
         >,
     ) -> Result<Vec<u8>, SignerError> {
-        todo!("v1.0")
+        let mut buf = Vec::new();
+        let msg = match response {
+            Response::SignedVote(resp) => v1::privval::message::Sum::SignedVoteResponse(resp),
+            Response::SignedProposal(resp) => {
+                v1::privval::message::Sum::SignedProposalResponse(resp)
+            }
+            Response::Ping(resp) => v1::privval::message::Sum::PingResponse(resp),
+            Response::PublicKey(resp) => v1::privval::message::Sum::PubKeyResponse(resp),
+        };
+        v1::privval::Message { sum: Some(msg) }.encode_length_delimited(&mut buf)?;
+        Ok(buf)
     }
 
-    fn proposal_to_bytes(_proposal: &Proposal, _chain_id: &str) -> Result<Vec<u8>, SignerError> {
-        todo!("v1.0")
+    fn proposal_to_bytes(proposal: &Proposal, chain_id: &str) -> Result<Vec<u8>, SignerError> {
+        let canonical = v1::types::CanonicalProposal {
+            r#type: proposal.step as i32,
+            height: proposal.height,
+            round: proposal.round,
+            pol_round: proposal.pol_round,
+            block_id: proposal
+                .block_id
+                .as_ref()
+                .map(|id| v1::types::CanonicalBlockId {
+                    hash: id.hash.clone().into(),
+                    part_set_header: id
+                        .parts
+                        .as_ref()
+                        .map(|p| v1::types::CanonicalPartSetHeader {
+                            total: p.total,
+                            hash: p.hash.clone().into(),
+                        }),
+                }),
+            timestamp: proposal.timestamp.map(|t| prost_types::Timestamp {
+                seconds: t / 1_000_000_000,
+                nanos: (t % 1_000_000_000) as i32,
+            }),
+            chain_id: chain_id.to_string(),
+        };
+
+        let mut bytes = Vec::new();
+        canonical.encode_length_delimited(&mut bytes)?;
+        Ok(bytes)
     }
 
-    fn vote_to_bytes(_vote: &Vote, _chain_id: &str) -> Result<Vec<u8>, SignerError> {
-        todo!("v1.0")
-    }
+    fn vote_to_bytes(vote: &Vote, chain_id: &str) -> Result<Vec<u8>, SignerError> {
+        info!("changing vote to bytes, block id: {:?}", vote.block_id);
 
-    fn create_proposal_response(
-        _proposal: Option<Proposal>,
-        _signature: Vec<u8>,
-        _error: Option<String>,
-    ) -> Self::ProposalResponse {
-        todo!()
-    }
+        let canonical = v1::types::CanonicalVote {
+            r#type: vote.step as i32,
+            height: vote.height,
+            round: vote.round,
 
-    fn create_vote_response(
-        _vote: Option<Vote>,
-        _signature: Vec<u8>,
-        _ext_signature: Option<Vec<u8>>,
-        _error: Option<String>,
-    ) -> Self::VoteResponse {
-        todo!()
-    }
+            block_id: vote.block_id.as_ref().and_then(|id| {
+                if id.hash.is_empty() {
+                    None
+                } else {
+                    let hdr = id
+                        .parts
+                        .as_ref()
+                        .map(|p| v1::types::CanonicalPartSetHeader {
+                            total: p.total,
+                            hash: p.hash.clone().into(),
+                        });
+                    Some(v1::types::CanonicalBlockId {
+                        hash: id.hash.clone().into(),
+                        part_set_header: hdr,
+                    })
+                }
+            }),
 
-    fn create_pub_key_response(_pub_key: Vec<u8>) -> Self::PubKeyResponse {
-        todo!()
-    }
+            timestamp: vote.timestamp.map(|t| prost_types::Timestamp {
+                seconds: t / 1_000_000_000,
+                nanos: (t % 1_000_000_000) as i32,
+            }),
 
-    fn create_ping_response() -> Self::PingResponse {
-        todo!()
+            chain_id: chain_id.to_string(),
+        };
+
+        let mut bytes = Vec::new();
+        canonical.encode_length_delimited(&mut bytes)?;
+        Ok(bytes)
     }
 
     fn vote_extension_to_bytes(vote: &Vote, chain_id: &str) -> Result<Vec<u8>, SignerError> {
-        todo!()
+        // todo: vote extension has to match what's in the vote
+        // possibly can be different if theres a bug
+        let copied = vote.clone();
+        let canonical = v1::types::CanonicalVoteExtension {
+            extension: copied.extension.into(),
+            height: copied.height,
+            round: copied.round,
+            chain_id: chain_id.to_string(),
+        };
+
+        let mut bytes = Vec::new();
+        canonical.encode_length_delimited(&mut bytes)?;
+        Ok(bytes)
     }
+
+    fn create_proposal_response(
+        proposal: Option<Proposal>,
+        signature: Vec<u8>,
+        error: Option<String>,
+    ) -> Self::ProposalResponse {
+        v1::privval::SignedProposalResponse {
+            proposal: proposal.map(|proposal| v1::types::Proposal {
+                r#type: proposal.step as i32,
+                height: proposal.height as i64,
+                round: proposal.round as i32,
+                pol_round: proposal.pol_round as i32,
+                block_id: proposal.block_id.map(|id| v1::types::BlockId {
+                    hash: id.hash.into(),
+                    part_set_header: id.parts.map(|p| v1::types::PartSetHeader {
+                        total: p.total,
+                        hash: p.hash.into(),
+                    }),
+                }),
+                timestamp: proposal.timestamp.map(|t| prost_types::Timestamp {
+                    seconds: t / 1_000_000_000,
+                    nanos: (t % 1_000_000_000) as i32,
+                }),
+                signature: signature.into(),
+            }),
+            error: error.map(|desc| v1::privval::RemoteSignerError {
+                code: 1,
+                description: desc,
+            }),
+        }
+    }
+
+    fn create_vote_response(
+        vote: Option<Vote>,
+        signature: Vec<u8>,
+        ext_signature: Option<Vec<u8>>,
+        error: Option<String>,
+    ) -> Self::VoteResponse {
+        v1::privval::SignedVoteResponse {
+            vote: vote.map(|vote| nebula::proto::v1::types::Vote {
+                r#type: vote.step.into(),
+                height: vote.height,
+                round: vote.round as i32,
+                block_id: vote.block_id.map(|id| id.into()),
+                timestamp: vote.timestamp.map(|t| prost_types::Timestamp {
+                    seconds: t / 1_000_000_000,
+                    nanos: (t % 1_000_000_000) as i32,
+                }),
+                validator_address: vote.validator_address.into(),
+                validator_index: vote.validator_index,
+                signature: signature.into(),
+                extension: vote.extension.into(),
+                extension_signature: ext_signature.unwrap_or_default().into(),
+            }),
+            error: error.map(|desc| v1::privval::RemoteSignerError {
+                code: 1,
+                description: desc,
+            }),
+        }
+    }
+
+    fn create_pub_key_response(pub_key: Vec<u8>) -> Self::PubKeyResponse {
+        // TODO: different key types!
+        v1::privval::PubKeyResponse {
+            error: None,
+            pub_key_bytes: pub_key.into(),
+            pub_key_type: "ed25519".to_string(),
+        }
+    }
+
+    fn create_ping_response() -> Self::PingResponse {
+        v1::privval::PingResponse {}
+    }
+}
+fn tendermint_vote_to_domain(vote: v1::types::Vote) -> Result<Vote, SignerError> {
+    Ok(Vote {
+        step: match vote.r#type {
+            1 => SignedMsgType::Prevote,
+            2 => SignedMsgType::Precommit,
+            32 => SignedMsgType::Proposal,
+            _ => SignedMsgType::Unknown,
+        },
+        height: vote.height,
+        round: vote.round as i64,
+        timestamp: vote
+            .timestamp
+            .map(|t| t.seconds * 1_000_000_000 + t.nanos as i64),
+        block_id: vote.block_id.map(|id| BlockId {
+            hash: id.hash.to_vec(),
+            parts: id.part_set_header.map(|p| PartSetHeader {
+                total: p.total,
+                hash: p.hash.to_vec(),
+            }),
+        }),
+        validator_address: vote.validator_address.to_vec(),
+        validator_index: vote.validator_index,
+        extension: vote.extension.to_vec(),
+        extension_signature: vote.extension_signature.to_vec(),
+    })
+}
+fn tendermint_proposal_to_domain(proposal: v1::types::Proposal) -> Result<Proposal, SignerError> {
+    Ok(Proposal {
+        step: SignedMsgType::Proposal,
+        height: proposal.height,
+        round: proposal.round as i64,
+        timestamp: proposal
+            .timestamp
+            .map(|t| t.seconds * 1_000_000_000 + t.nanos as i64),
+        pol_round: proposal.pol_round as i64,
+        block_id: proposal.block_id.map(|id| BlockId {
+            hash: id.hash.to_vec(),
+            parts: id.part_set_header.map(|p| PartSetHeader {
+                total: p.total,
+                hash: p.hash.to_vec(),
+            }),
+        }),
+    })
 }

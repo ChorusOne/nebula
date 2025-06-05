@@ -138,7 +138,6 @@ fn run_leader_loop_for_version<V: ProtocolVersion + Send + 'static>(
         let cluster_clone = Arc::clone(cluster);
         let consensus_clone = Arc::clone(&consensus_state);
         let config_clone = Arc::clone(&config);
-        let private_key_path = config_clone.private_key_path.clone();
         let chain_id = config_clone.chain_id.clone();
         let host_str = conn_cfg.host.clone();
         let port_num = conn_cfg.port;
@@ -163,7 +162,7 @@ fn run_leader_loop_for_version<V: ProtocolVersion + Send + 'static>(
                         SigningMode::Native => {
                             let native_cfg = config_clone.signing.native.as_ref().unwrap();
 
-                            let priv_key_path = native_cfg.priv_key_path.clone();
+                            let priv_key_path = native_cfg.private_key_path.clone();
                             match native_cfg.key_type {
                                 KeyType::Ed25519 => {
                                     let ed = Ed25519Signer::from_key_file(&priv_key_path)?;

@@ -1,6 +1,6 @@
 use crate::backend::SigningBackend;
 use crate::protocol::{Request, Response};
-use crate::types::{BlockId, BufferError, SignedMsgType};
+use crate::types::{BufferError, SignedMsgType};
 use crate::versions::ProtocolVersion;
 use log::info;
 use nebula::SignerError;
