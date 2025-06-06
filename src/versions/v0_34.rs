@@ -1,6 +1,7 @@
 use nebula::SignerError;
 
 use super::ProtocolVersion;
+use crate::backend::PublicKey;
 use crate::protocol::{Request, Response};
 use crate::types::{Proposal, Vote};
 
@@ -53,7 +54,7 @@ impl ProtocolVersion for VersionV0_34 {
         todo!()
     }
 
-    fn create_pub_key_response(_pub_key: Vec<u8>) -> Self::PubKeyResponse {
+    fn create_pub_key_response(_pub_key: PublicKey) -> Self::PubKeyResponse {
         todo!()
     }
 

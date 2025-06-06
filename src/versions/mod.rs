@@ -1,3 +1,4 @@
+use crate::backend::PublicKey;
 use crate::protocol::{Request, Response};
 use crate::types::{Proposal, Vote};
 
@@ -42,6 +43,6 @@ pub trait ProtocolVersion {
         extension_signature: Option<Vec<u8>>,
         error: Option<String>,
     ) -> Self::VoteResponse;
-    fn create_pub_key_response(pub_key: Vec<u8>) -> Self::PubKeyResponse;
+    fn create_pub_key_response(pub_key: PublicKey) -> Self::PubKeyResponse;
     fn create_ping_response() -> Self::PingResponse;
 }

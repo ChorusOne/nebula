@@ -75,6 +75,12 @@ impl From<toml::de::Error> for SignerError {
     }
 }
 
+impl From<k256::ecdsa::Error> for SignerError {
+    fn from(toml_error: k256::ecdsa::Error) -> SignerError {
+        SignerError::Other(toml_error.to_string())
+    }
+}
+
 impl From<serde_json::Error> for SignerError {
     fn from(e: serde_json::Error) -> Self {
         SignerError::Other(e.to_string())

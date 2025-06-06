@@ -1,4 +1,5 @@
 use super::ProtocolVersion;
+use crate::backend::PublicKey;
 use crate::protocol::{Request, Response};
 use crate::types::{BlockId, PartSetHeader, Proposal, SignedMsgType, Vote};
 use log::info;
@@ -209,12 +210,12 @@ impl ProtocolVersion for VersionV1_0 {
         }
     }
 
-    fn create_pub_key_response(pub_key: Vec<u8>) -> Self::PubKeyResponse {
+    fn create_pub_key_response(pub_key: PublicKey) -> Self::PubKeyResponse {
         // TODO: different key types!
         v1::privval::PubKeyResponse {
             error: None,
-            pub_key_bytes: pub_key.into(),
-            pub_key_type: "ed25519".to_string(),
+            pub_key_bytes: pub_key.bytes.into(),
+            pub_key_type: pub_key.key_type.into(),
         }
     }
 

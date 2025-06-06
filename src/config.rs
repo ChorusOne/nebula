@@ -93,3 +93,25 @@ pub enum KeyType {
     Secp256k1,
     Bls12_381,
 }
+
+impl TryFrom<&str> for KeyType {
+    type Error = SignerError;
+    fn try_from(key_type_str: &str) -> Result<KeyType, SignerError> {
+        match key_type_str {
+            "ed25519" => Ok(KeyType::Ed25519),
+            "secp256k1" => Ok(KeyType::Secp256k1),
+            "bls12_381" => Ok(KeyType::Bls12_381),
+            _ => Err(SignerError::InvalidData),
+        }
+    }
+}
+
+impl From<KeyType> for String {
+    fn from(key_type: KeyType) -> String {
+        match key_type {
+            KeyType::Ed25519 => "ed25519".to_string(),
+            KeyType::Secp256k1 => "secp256k1".to_string(),
+            KeyType::Bls12_381 => "bls12_381".to_string(),
+        }
+    }
+}

@@ -1,4 +1,5 @@
 use super::ProtocolVersion;
+use crate::backend::PublicKey;
 use crate::protocol::{Request, Response};
 use crate::types::{BlockId, PartSetHeader, Proposal, SignedMsgType, Vote};
 use log::info;
@@ -204,10 +205,20 @@ impl ProtocolVersion for VersionV0_38 {
         }
     }
 
-    fn create_pub_key_response(pub_key: Vec<u8>) -> Self::PubKeyResponse {
+    fn create_pub_key_response(pub_key: PublicKey) -> Self::PubKeyResponse {
         v0_38::privval::PubKeyResponse {
             pub_key: Some(v0_38::crypto::PublicKey {
-                sum: Some(v0_38::crypto::public_key::Sum::Ed25519(pub_key.into())),
+                sum: Some(match pub_key.key_type {
+                    crate::config::KeyType::Ed25519 => {
+                        v0_38::crypto::public_key::Sum::Ed25519(pub_key.bytes.into())
+                    }
+                    crate::config::KeyType::Secp256k1 => {
+                        v0_38::crypto::public_key::Sum::Secp256k1(pub_key.bytes.into())
+                    }
+                    crate::config::KeyType::Bls12_381 => {
+                        v0_38::crypto::public_key::Sum::Bls12381(pub_key.bytes.into())
+                    }
+                }),
             }),
             error: None,
         }

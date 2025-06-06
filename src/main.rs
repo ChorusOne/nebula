@@ -22,7 +22,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::thread::sleep;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use types::SignedMsgType;
 use versions::{ProtocolVersion, VersionV0_34, VersionV0_37, VersionV0_38, VersionV1_0};
 
@@ -199,6 +199,7 @@ fn run_leader_loop_for_version<V: ProtocolVersion + Send + 'static>(
             let mut signer_instance = establish_connection()?;
 
             loop {
+                let start = Instant::now();
                 if !cluster_clone.is_leader() {
                     warn!(
                         "Thread for {}:{} sees leadership lost → exiting",
@@ -337,6 +338,7 @@ fn run_leader_loop_for_version<V: ProtocolVersion + Send + 'static>(
                         );
                     }
                 }
+                info!("Handling the request took: {:?}", start.elapsed());
             }
 
             Ok(())

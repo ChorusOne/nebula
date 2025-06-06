@@ -7,7 +7,7 @@ use reqwest::header::{HeaderMap, HeaderValue};
 use serde_json::Value;
 use std::time::Duration;
 
-use crate::backend::SigningBackend;
+use crate::backend::{PublicKey, SigningBackend};
 use crate::config::VaultConfig;
 
 pub struct VaultSigner {
@@ -16,7 +16,7 @@ pub struct VaultSigner {
     transit_path: String,
     key_name: String,
     token: String,
-    pub_key: Vec<u8>,
+    pub_key: PublicKey,
 }
 
 impl VaultSigner {
@@ -42,7 +42,6 @@ impl VaultSigner {
             &cfg.key_name,
             &cfg.token,
         )?;
-        info!("got public key: {:#?}", pub_key);
 
         Ok(VaultSigner {
             client,
@@ -60,7 +59,7 @@ impl VaultSigner {
         transit_path: &str,
         key_name: &str,
         token: &str,
-    ) -> Result<Vec<u8>, SignerError> {
+    ) -> Result<PublicKey, SignerError> {
         let url = format!("{}/v1/{}/keys/{}", base_url, transit_path, key_name);
         info!("fetching vault pubkey from {}", url);
 
@@ -75,6 +74,9 @@ impl VaultSigner {
             .json::<Value>()?;
 
         let data = &resp["data"];
+        let key_type = data["type"]
+            .as_str()
+            .ok_or_else(|| SignerError::VaultError("invalid key type".to_string()))?;
         let latest_version = data["latest_version"].as_i64().ok_or_else(|| {
             SignerError::VaultError("missing or invalid latest_version".to_string())
         })?;
@@ -100,7 +102,10 @@ impl VaultSigner {
                 raw.len()
             )));
         }
-        Ok(raw)
+        Ok(PublicKey {
+            bytes: raw,
+            key_type: key_type.try_into()?,
+        })
     }
 
     fn sign_data(&self, data: &[u8]) -> Result<Vec<u8>, SignerError> {
@@ -148,7 +153,7 @@ impl SigningBackend for VaultSigner {
         self.sign_data(data)
     }
 
-    fn public_key(&self) -> Result<Vec<u8>, SignerError> {
+    fn public_key(&self) -> Result<PublicKey, SignerError> {
         Ok(self.pub_key.clone())
     }
 }
