@@ -28,7 +28,7 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
     }
 
     pub fn process_request(
-        &self,
+        &mut self,
         request: Request,
     ) -> Result<
         Response<V::ProposalResponse, V::VoteResponse, V::PubKeyResponse, V::PingResponse>,

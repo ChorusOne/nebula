@@ -209,13 +209,13 @@ impl ProtocolVersion for VersionV0_38 {
         v0_38::privval::PubKeyResponse {
             pub_key: Some(v0_38::crypto::PublicKey {
                 sum: Some(match pub_key.key_type {
-                    crate::config::KeyType::Ed25519 => {
+                    crate::types::KeyType::Ed25519 => {
                         v0_38::crypto::public_key::Sum::Ed25519(pub_key.bytes.into())
                     }
-                    crate::config::KeyType::Secp256k1 => {
+                    crate::types::KeyType::Secp256k1 => {
                         v0_38::crypto::public_key::Sum::Secp256k1(pub_key.bytes.into())
                     }
-                    crate::config::KeyType::Bls12_381 => {
+                    crate::types::KeyType::Bls12_381 => {
                         v0_38::crypto::public_key::Sum::Bls12381(pub_key.bytes.into())
                     }
                 }),
@@ -363,7 +363,7 @@ mod tests {
 
     #[test]
     fn test_full_signing_flow() {
-        let test_signer = Ed25519Signer::from_key_file("./privkey");
+        let test_signer = Ed25519Signer::from_key_file("./keys/privkey");
 
         let proposal = create_test_proposal();
         let chain_id = "testing";

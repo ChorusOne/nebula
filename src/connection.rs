@@ -25,11 +25,6 @@ pub fn open_secret_connection(
             }
         };
 
-        // // let timeout_duration = Duration::from_secs(1);
-        // // socket.set_read_timeout(Some(timeout_duration))?;
-        // // socket.set_write_timeout(Some(timeout_duration))?;
-        // socket.set_nonblocking(false)?;
-
         match SecretConnection::new(socket, identity_key.clone(), protocol_version) {
             Ok(conn) => {
                 info!("Successfully connected to {}:{}", host, port);

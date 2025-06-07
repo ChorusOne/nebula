@@ -1,0 +1,30 @@
+chain_id         = "testing"
+version          = "v0_38"
+signing_mode     = "vault"
+
+[raft]
+node_id      = 1
+bind_addr    = "127.0.0.1:7001"
+state_file   = "./cluster-data/state_node1"
+initial_state_path = "./configs/consensus_state.json"
+
+[[raft.peers]]
+id = 1
+addr = "127.0.0.1:7001"
+
+[[connections]]
+host              = "192.168.0.5"
+port              = 36558
+identity_key_path = "./configs/privkey"
+
+[[connections]]
+host              = "192.168.0.5"
+port              = 26558
+identity_key_path = "./configs/privkey"
+
+[signing.vault]
+address      = "http://127.0.0.1:8200"
+token        = "root"
+transit_path = "transit"
+key_name     = "validator-key-simd"
+skip_verify  = true

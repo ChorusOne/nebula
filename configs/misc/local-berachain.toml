@@ -1,0 +1,22 @@
+chain_id         = "beacond-2061"
+version          = "v1_0"
+signing_mode     = "native"
+
+[raft]
+node_id      = 1
+bind_addr    = "127.0.0.1:7001"
+data_path   = "./cluster-data/state_node1"
+initial_state_path = "./configs/consensus_state.json"
+
+[[raft.peers]]
+id = 1
+addr = "127.0.0.1:7001"
+
+[[connections]]
+host              = "127.0.0.1"
+port              = 26659
+
+
+[signing.native]
+private_key_path = "./keys/berachain"
+key_type = "bls12_381"

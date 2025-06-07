@@ -2,3 +2,4 @@
 # rocksdb files with raft data
 *.db
 consensus_state.json
+cluster-data

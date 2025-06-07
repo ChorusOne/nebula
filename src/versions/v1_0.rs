@@ -224,6 +224,7 @@ impl ProtocolVersion for VersionV1_0 {
     }
 }
 fn tendermint_vote_to_domain(vote: v1::types::Vote) -> Result<Vote, SignerError> {
+    info!("converting tendermint vote: {:?} to domain type", vote);
     Ok(Vote {
         step: match vote.r#type {
             1 => SignedMsgType::Prevote,
@@ -235,7 +236,7 @@ fn tendermint_vote_to_domain(vote: v1::types::Vote) -> Result<Vote, SignerError>
         round: vote.round as i64,
         timestamp: vote
             .timestamp
-            .map(|t| t.seconds * 1_000_000_000 + t.nanos as i64),
+            .map(|t| t.seconds /* * 1_000_000_000 */ + t.nanos as i64),
         block_id: vote.block_id.map(|id| BlockId {
             hash: id.hash.to_vec(),
             parts: id.part_set_header.map(|p| PartSetHeader {

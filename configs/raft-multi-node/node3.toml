@@ -1,0 +1,33 @@
+chain_id         = "testing"
+version          = "v0_38"
+signing_mode     = "native"
+
+[raft]
+node_id      = 3
+bind_addr    = "127.0.0.1:7003"
+data_path   = "./cluster-data/state_node3.json"
+initial_state_path = "./configs/consensus_state.json"
+
+[[raft.peers]]
+id = 1
+addr = "127.0.0.1:7001"
+
+[[raft.peers]]
+id = 2
+addr = "127.0.0.1:7002"
+
+[[raft.peers]]
+id = 3
+addr = "127.0.0.1:7003"
+
+[[connections]]
+host              = "192.168.0.5"
+port              = 36558
+
+[[connections]]
+host              = "192.168.0.5"
+port              = 26558
+
+[signing.native]
+private_key_path = "./keys/privkey"
+key_type = "ed25519"

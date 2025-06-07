@@ -149,7 +149,7 @@ impl VaultSigner {
 }
 
 impl SigningBackend for VaultSigner {
-    fn sign(&self, data: &[u8]) -> Result<Vec<u8>, SignerError> {
+    fn sign(&mut self, data: &[u8]) -> Result<Vec<u8>, SignerError> {
         self.sign_data(data)
     }
 

@@ -6,16 +6,17 @@ use nebula::SignerError;
 use std::fs;
 use std::path::Path;
 
-use crate::config::KeyType;
+use crate::types::KeyType;
 
 pub trait SigningBackend {
-    fn sign(&self, data: &[u8]) -> Result<Vec<u8>, SignerError>;
+    // TODO: this is mutable because of the secp256k1 signer.
+    fn sign(&mut self, data: &[u8]) -> Result<Vec<u8>, SignerError>;
 
     fn public_key(&self) -> Result<PublicKey, SignerError>;
 }
 
 impl SigningBackend for Box<dyn SigningBackend> {
-    fn sign(&self, data: &[u8]) -> Result<Vec<u8>, SignerError> {
+    fn sign(&mut self, data: &[u8]) -> Result<Vec<u8>, SignerError> {
         (**self).sign(data)
     }
 
@@ -50,7 +51,7 @@ impl Ed25519Signer {
 }
 
 impl SigningBackend for Ed25519Signer {
-    fn sign(&self, data: &[u8]) -> Result<Vec<u8>, SignerError> {
+    fn sign(&mut self, data: &[u8]) -> Result<Vec<u8>, SignerError> {
         Ok(self.signing_key.sign(data).to_bytes().to_vec())
     }
 
@@ -96,12 +97,12 @@ impl Secp256k1Signer {
 }
 
 impl SigningBackend for Secp256k1Signer {
-    fn sign(&self, data: &[u8]) -> Result<Vec<u8>, SignerError> {
-        // let signature: k256::ecdsa::Signature = self.signing_key.try_sign(data)?;
-        // Ok(signature.as_ref().to_vec())
+    fn sign(&mut self, data: &[u8]) -> Result<Vec<u8>, SignerError> {
+        let signature: k256::ecdsa::Signature = self.signing_key.try_sign(data)?;
+        Ok(signature.as_ref().to_vec())
         // todo
-        let signature = Vec::new();
-        Ok(signature)
+        // let signature = Vec::new();
+        // Ok(signature)
     }
 
     fn public_key(&self) -> Result<PublicKey, SignerError> {
@@ -142,7 +143,7 @@ impl Bls12381Signer {
 }
 
 impl SigningBackend for Bls12381Signer {
-    fn sign(&self, data: &[u8]) -> Result<Vec<u8>, SignerError> {
+    fn sign(&mut self, data: &[u8]) -> Result<Vec<u8>, SignerError> {
         let signature =
             self.secret_key
                 .sign(data, b"BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_", &[]);

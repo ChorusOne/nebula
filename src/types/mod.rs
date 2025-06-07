@@ -1,3 +1,4 @@
+use nebula::SignerError;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -134,4 +135,72 @@ pub struct Proposal {
 pub enum BufferError {
     #[error("Insufficient amount of bytes in the buffer")]
     NeedMoreBytes,
+}
+
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Clone)]
+#[serde(rename_all = "snake_case")]
+pub enum KeyType {
+    Ed25519,
+    Secp256k1,
+    Bls12_381,
+}
+
+impl TryFrom<&str> for KeyType {
+    type Error = SignerError;
+    fn try_from(key_type_str: &str) -> Result<KeyType, SignerError> {
+        match key_type_str {
+            "ed25519" => Ok(KeyType::Ed25519),
+            "secp256k1" => Ok(KeyType::Secp256k1),
+            "bls12_381" => Ok(KeyType::Bls12_381),
+            _ => Err(SignerError::InvalidData),
+        }
+    }
+}
+
+impl From<KeyType> for String {
+    fn from(key_type: KeyType) -> String {
+        match key_type {
+            KeyType::Ed25519 => "ed25519".to_string(),
+            KeyType::Secp256k1 => "secp256k1".to_string(),
+            KeyType::Bls12_381 => "bls12_381".to_string(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct ConsensusData {
+    pub height: i64,
+    pub round: i64,
+    pub step: u8,
+}
+
+impl std::fmt::Display for ConsensusData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "ConsensusData {{ height: {}, round: {}, step: {} }}",
+            self.height, self.round, self.step
+        )
+    }
+}
+
+impl ConsensusData {
+    pub fn persist_to_file(&self, path: &std::path::Path) -> std::io::Result<()> {
+        let json = serde_json::to_string_pretty(self)?;
+        let temp_path = path.with_extension("json.tmp");
+        std::fs::write(&temp_path, json)?;
+        std::fs::rename(&temp_path, path)
+    }
+
+    pub fn load_from_file(path: &std::path::Path) -> Option<ConsensusData> {
+        let json = std::fs::read_to_string(path).ok()?;
+        serde_json::from_str(&json).ok()
+    }
+    pub fn to_bytes(&self) -> Vec<u8> {
+        serde_json::to_vec(self).unwrap()
+    }
+
+    pub fn from_bytes(buf: &[u8]) -> Option<ConsensusData> {
+        serde_json::from_slice(buf).ok()
+    }
 }

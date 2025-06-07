@@ -7,9 +7,10 @@ mod signer;
 mod types;
 mod versions;
 
+use crate::backend::{Bls12381Signer, Secp256k1Signer};
 use crate::backend::{Ed25519Signer, SigningBackend, vault::VaultSigner};
-use crate::config::{KeyType, SigningMode};
-use cluster::{Cluster, ConsensusData};
+use crate::config::SigningMode;
+use cluster::Cluster;
 use config::{Config, ProtocolVersionConfig};
 use connection::open_secret_connection;
 use log::{error, info, warn};
@@ -17,11 +18,12 @@ use nebula::SignerError;
 use protocol::{Request, Response};
 use signer::Signer;
 use std::cmp::Ordering;
-use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
+use types::ConsensusData;
+use types::KeyType;
 use types::SignedMsgType;
 use versions::{ProtocolVersion, VersionV0_34, VersionV0_37, VersionV0_38, VersionV1_0};
 
@@ -40,21 +42,10 @@ fn main() -> Result<(), SignerError> {
     info!("Loading config from: {}", config_path);
     info!("Chain ID: {}", config.chain_id);
     info!("Protocol version: {:?}", config.version);
-    info!("Node ID: {}", config.node_id);
+    info!("Node ID: {}", config.raft.node_id);
 
-    let mut peer_addrs = Vec::new();
-    for peer_str in &config.peers {
-        let sa = peer_str.parse().expect("invalid peer address");
-        peer_addrs.push(sa);
-    }
-
-    let cluster = Cluster::new(
-        config.node_id,
-        peer_addrs.clone(),
-        config.cluster_port,
-        config.state_file.clone(),
-    )
-    .expect("failed to start cluster");
+    // let cluster = Cluster::new(config.raft.clone()).expect("failed to start cluster");
+    let cluster = Cluster::new(config.raft.clone());
 
     loop {
         loop {
@@ -66,7 +57,7 @@ fn main() -> Result<(), SignerError> {
         }
 
         if cluster.is_leader() {
-            info!("This node ({}) is now the leader!", config.node_id);
+            info!("This node ({}) is now the leader!", config.raft.node_id);
 
             let run_result = match config.version {
                 ProtocolVersionConfig::V0_34 => {
@@ -92,7 +83,7 @@ fn main() -> Result<(), SignerError> {
                 }
             }
 
-            info!("No longer the leader → back to follower mode");
+            info!("No longer the leader -> back to follower mode");
         } else {
             info!("This node is a follower, standing by…");
             loop {
@@ -118,15 +109,8 @@ fn run_leader_loop_for_version<V: ProtocolVersion + Send + 'static>(
         config.connections.len()
     );
 
-    let state_path = Path::new(&config.state_file);
-    let initial_state = ConsensusData::load_from_file(state_path).unwrap_or(ConsensusData {
-        height: 0,
-        round: 0,
-        step: SignedMsgType::Unknown as u8,
-    });
-    let consensus_state = Arc::new(Mutex::new(initial_state));
-
     let config = Arc::new(config.clone());
+    let signing_lock = Arc::new(std::sync::Mutex::new(()));
 
     let mut thread_handles = Vec::with_capacity(config.connections.len());
 
@@ -134,8 +118,8 @@ fn run_leader_loop_for_version<V: ProtocolVersion + Send + 'static>(
         let identity_key = ed25519_consensus::SigningKey::new(rand_core::OsRng);
 
         let cluster_clone = Arc::clone(cluster);
-        let consensus_clone = Arc::clone(&consensus_state);
         let config_clone = Arc::clone(&config);
+        let signing_lock_clone = Arc::clone(&signing_lock);
         let chain_id = config_clone.chain_id.clone();
         let host_str = conn_cfg.host.clone();
         let port_num = conn_cfg.port;
@@ -154,7 +138,7 @@ fn run_leader_loop_for_version<V: ProtocolVersion + Send + 'static>(
                         identity_key.clone(),
                         tendermint_p2p::secret_connection::Version::V0_34,
                     )?;
-                    info!(" → Connected to CometBFT at {}:{}", host_str, port_num);
+                    info!(" -> Connected to CometBFT at {}:{}", host_str, port_num);
 
                     let backend: Box<dyn SigningBackend> = match config_clone.signing_mode {
                         SigningMode::Native => {
@@ -167,14 +151,12 @@ fn run_leader_loop_for_version<V: ProtocolVersion + Send + 'static>(
                                     Box::new(ed)
                                 }
                                 KeyType::Secp256k1 => {
-                                    // let sk = Secp256k1Signer::from_key_file(&priv_key_path)?;
-                                    // Box::new(sk)
-                                    todo!();
+                                    let sk = Secp256k1Signer::from_key_file(&priv_key_path)?;
+                                    Box::new(sk)
                                 }
                                 KeyType::Bls12_381 => {
-                                    // let bls = Bls12381Signer::from_key_file(&priv_key_path)?;
-                                    // Box::new(bls)
-                                    todo!();
+                                    let bls = Bls12381Signer::from_key_file(&priv_key_path)?;
+                                    Box::new(bls)
                                 }
                             }
                         }
@@ -200,7 +182,7 @@ fn run_leader_loop_for_version<V: ProtocolVersion + Send + 'static>(
                 let start = Instant::now();
                 if !cluster_clone.is_leader() {
                     warn!(
-                        "Thread for {}:{} sees leadership lost → exiting",
+                        "Thread for {}:{} sees leadership lost -> exiting",
                         host_str, port_num
                     );
                     break;
@@ -217,7 +199,7 @@ fn run_leader_loop_for_version<V: ProtocolVersion + Send + 'static>(
                         }
 
                         error!(
-                            "I/O error reading from {}:{} → {}. Attempting reconnection...",
+                            "I/O error reading from {}:{} -> {}. Attempting reconnection...",
                             host_str, port_num, e
                         );
 
@@ -248,7 +230,7 @@ fn run_leader_loop_for_version<V: ProtocolVersion + Send + 'static>(
                                 }
                                 Err(reconnect_err) => {
                                     error!(
-                                        "Reconnection failed for {}:{} → {}",
+                                        "Reconnection failed for {}:{} -> {}",
                                         host_str, port_num, reconnect_err
                                     );
                                     continue;
@@ -260,17 +242,25 @@ fn run_leader_loop_for_version<V: ProtocolVersion + Send + 'static>(
                     }
                 };
 
-                info!("Received request from {}:{}: {:?}", host_str, port_num, req);
-
-                let mut state_guard = consensus_clone.lock().unwrap();
+                info!(
+                    "Received request after {:?} from {}:{}: {:?}",
+                    start.elapsed(),
+                    host_str,
+                    port_num,
+                    req
+                );
+                let start = Instant::now(); // we
 
                 let response = match req {
                     Request::SignProposal(proposal) => {
+                        let _guard = signing_lock_clone.lock().unwrap();
+
                         if !cluster_clone.is_leader() {
                             break;
                         }
 
-                        if !should_sign_proposal(&state_guard, &proposal) {
+                        let current_state = cluster_clone.state_machine.read().unwrap().clone();
+                        if !should_sign_proposal(&current_state, &proposal) {
                             info!(
                                 "prevented us from double signing a proposal at: {:?}",
                                 proposal
@@ -279,64 +269,84 @@ fn run_leader_loop_for_version<V: ProtocolVersion + Send + 'static>(
                                 <V as ProtocolVersion>::create_proposal_response(
                                     None,
                                     Vec::new(),
-                                    Some("would double‐sign proposal at same height/round".into()),
+                                    Some("would double-sign proposal at same height/round".into()),
                                 ),
                             )
                         } else {
-                            state_guard.height = proposal.height;
-                            state_guard.round = proposal.round;
-                            state_guard.step = SignedMsgType::Proposal as u8;
+                            let new_state = ConsensusData {
+                                height: proposal.height,
+                                round: proposal.round,
+                                step: SignedMsgType::Proposal as u8,
+                            };
 
-                            if let Err(e) = cluster_clone.replicate_state(*state_guard) {
-                                error!("Replication failed: {}", e);
-                                panic!("Replication to cluster failed: {}", e);
+                            if let Err(e) = cluster_clone.replicate_state(new_state) {
+                                error!("CRITICAL: State replication failed: {}. Not signing.", e);
+                                Response::SignedProposal(
+                                    <V as ProtocolVersion>::create_proposal_response(
+                                        None,
+                                        Vec::new(),
+                                        Some(format!("Raft replication failed: {}", e)),
+                                    ),
+                                )
+                            } else {
+                                signer_instance.process_request(Request::SignProposal(proposal))?
                             }
-
-                            signer_instance.process_request(Request::SignProposal(proposal))?
                         }
                     }
 
                     Request::SignVote(vote) => {
+                        let _guard = signing_lock_clone.lock().unwrap();
                         if !cluster_clone.is_leader() {
                             break;
                         }
-                        if !should_sign_vote(&state_guard, &vote) {
+
+                        let current_state = cluster_clone.state_machine.read().unwrap().clone();
+                        if !should_sign_vote(&current_state, &vote) {
                             info!("prevented us from double signing a vote at: {:?}", vote);
                             Response::SignedVote(<V as ProtocolVersion>::create_vote_response(
                                 None,
                                 Vec::new(),
                                 None,
-                                Some("would double‐sign vote at same height/round".into()),
+                                Some("would double-sign vote at same height/round".into()),
                             ))
                         } else {
-                            state_guard.height = vote.height;
-                            state_guard.round = vote.round;
-                            state_guard.step = vote.step.into();
+                            let new_state = ConsensusData {
+                                height: vote.height,
+                                round: vote.round,
+                                step: vote.step.into(),
+                            };
 
-                            if let Err(e) = cluster_clone.replicate_state(*state_guard) {
-                                error!("Replication failed: {}", e);
-                                panic!("Replication to cluster failed: {}", e);
+                            if let Err(e) = cluster_clone.replicate_state(new_state) {
+                                error!("CRITICAL: State replication failed: {}. Not signing.", e);
+                                Response::SignedVote(<V as ProtocolVersion>::create_vote_response(
+                                    None,
+                                    Vec::new(),
+                                    None,
+                                    Some(format!("Raft replication failed: {}", e)),
+                                ))
+                            } else {
+                                signer_instance.process_request(Request::SignVote(vote))?
                             }
-
-                            signer_instance.process_request(Request::SignVote(vote))?
                         }
                     }
 
                     other => signer_instance.process_request(other)?,
                 };
-
-                drop(state_guard);
+                info!("Request processed. Took: {:?}", start.elapsed());
 
                 match signer_instance.send_response(response) {
                     Ok(()) => {}
                     Err(e) => {
                         error!(
-                            "Error sending response to {}:{} → {}. Will reconnect on next iteration.",
+                            "Error sending response to {}:{} -> {}. Will reconnect on next iteration.",
                             host_str, port_num, e
                         );
                     }
                 }
-                info!("Handling the request took: {:?}", start.elapsed());
+                info!(
+                    "Sent response! Sending the response took: {:?}",
+                    start.elapsed()
+                );
             }
 
             Ok(())

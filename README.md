@@ -123,3 +123,26 @@ Generate files (you shouldn't need to do that):
 ```
 buf generate --template buf.gen.yaml
 ```
+
+
+   89  sudo apt update && sudo apt install vault
+   94  vault secrets enable transit
+   98  vault transit import transit/keys/validator-key @privkey.pk8.b64 type=ed25519 exportable=true
+   99  vault transit import transit/keys/validator-key @b64_privkey type=ed25519 exportable=true
+  100  vault read -format=json transit/keys/validator-key   | jq -r '.data.keys["1"].public_key
+  103  vault read -format=json transit/keys/validator-key   | jq -r '.data.keys["1"].public_key
+  115  vault server -dev -dev-root-token-id="root" -dev-listen-address="127.0.0.1:8200"
+  125  vault read -format=json transit/keys/validator-key   | jq -r '.data.keys["1"].public_key
+  129  vault read -format=json transit/keys/validator-key   | jq -r '.data.keys["1"].public_key
+  131  vault secrets enable transit
+  132  vault transit import transit/keys/validator-key @b64_privkey type=ed25519 exportable=true
+  165  vault transit import transit/keys/validator-key-injective @b64_injective_privkey type=ed25519 exportable=true
+  168  vault transit import transit/keys/validator-key-injective @b64_injective_privkey type=ed25519 exportable=true
+  173  vault read -format=json transit/keys/validator-key-injective   | jq -r '.data.keys["1"].public_key
+  183  vault read -format=json transit/keys/validator-key   | jq -r '.data.keys["1"].public_key
+  189  vault read -format=json transit/keys/validator-key   | jq -r '.data.keys["1"].public_key
+  191  vault read -format=json transit/keys/validator-key   | jq -r '.data.keys["1"]
+  193  vault read -format=json transit/keys/validator-key   | jq -r '.data.keys["1"]'
+  194  vault read -format=json transit/keys/validator-key   | jq -r '.data'
+  207  history | grep vault
+root@ha-signer03:~#
