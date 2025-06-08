@@ -32,7 +32,6 @@ pub enum ProtocolVersionConfig {
 pub struct ConnectionConfig {
     pub host: String,
     pub port: u16,
-    pub identity_key_path: PathBuf,
 }
 
 impl Config {

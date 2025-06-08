@@ -1,4 +1,3 @@
-private_key_path = "privkey-2"
 chain_id = "osmo-test-5"
 version = "v0_38"
 node_id = 1
@@ -6,8 +5,12 @@ peers = []
 #peers = ["141.95.97.184:50002","51.91.74.235:50001"]
 cluster_port = 50003
 state_file = "consensus_state.json"
+signing_mode = "native"
 
 [[connections]]
 host                   = "192.168.0.5"
 port                   = 26558
-identity_key_path = "./privkey-2"
+
+[signing.native]
+private_key_path = "./configs/privkey"
+key_type = "ed25519"

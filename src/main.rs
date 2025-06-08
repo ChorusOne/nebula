@@ -17,7 +17,6 @@ use nebula::SignerError;
 use protocol::{Request, Response};
 use signer::Signer;
 use std::cmp::Ordering;
-use std::fs;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -132,8 +131,7 @@ fn run_leader_loop_for_version<V: ProtocolVersion + Send + 'static>(
     let mut thread_handles = Vec::with_capacity(config.connections.len());
 
     for conn_cfg in config.connections.iter() {
-        let key_bytes = fs::read(&conn_cfg.identity_key_path)?;
-        let identity_key = ed25519_consensus::SigningKey::try_from(&key_bytes[..32])?;
+        let identity_key = ed25519_consensus::SigningKey::new(rand_core::OsRng);
 
         let cluster_clone = Arc::clone(cluster);
         let consensus_clone = Arc::clone(&consensus_state);

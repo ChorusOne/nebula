@@ -11,7 +11,7 @@ chrono = { version = "0.4", features = ["serde"] }
 ed25519-dalek = "2.1.1"
 tendermint-p2p = "0.40.4"
 ed25519-consensus = "2.1.0"
-rand_core = { version = "0.6.4"}
+rand_core = { version = "0.6.4", features = ["std"]}
 toml = "0.8.22"
 base64 = "0.22.1"
 log = "0.4.27"

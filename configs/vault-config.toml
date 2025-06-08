@@ -17,6 +17,6 @@ identity_key_path = "./configs/privkey-2"
 address      = "http://127.0.0.1:8200"
 token        = "root"
 transit_path = "transit"
-key_name     = "validator-key"
+key_name     = "validator-key-simd"
 cacert       = ""
 skip_verify  = false
