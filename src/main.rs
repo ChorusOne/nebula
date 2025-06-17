@@ -2,7 +2,10 @@ mod backend;
 mod cluster;
 mod config;
 mod connection;
+mod error;
+mod proto;
 mod protocol;
+mod safeguards;
 mod signer;
 mod types;
 mod versions;
@@ -10,14 +13,13 @@ mod versions;
 use crate::backend::{Bls12381Signer, Secp256k1Signer};
 use crate::backend::{Ed25519Signer, SigningBackend, vault::VaultSigner};
 use crate::config::SigningMode;
+use crate::error::SignerError;
 use cluster::Cluster;
 use config::{Config, ProtocolVersionConfig};
 use connection::open_secret_connection;
 use log::{error, info, warn};
-use nebula::SignerError;
 use protocol::{Request, Response};
 use signer::Signer;
-use std::cmp::Ordering;
 use std::sync::Arc;
 use std::thread;
 use std::thread::sleep;
@@ -26,8 +28,6 @@ use types::ConsensusData;
 use types::KeyType;
 use types::SignedMsgType;
 use versions::{ProtocolVersion, VersionV0_34, VersionV0_37, VersionV0_38, VersionV1_0};
-
-use crate::types::{Proposal, Vote};
 
 fn main() -> Result<(), SignerError> {
     let config_path = std::env::args()
@@ -260,7 +260,7 @@ fn run_leader_loop_for_version<V: ProtocolVersion + Send + 'static>(
                         }
 
                         let current_state = cluster_clone.state_machine.read().unwrap().clone();
-                        if !should_sign_proposal(&current_state, &proposal) {
+                        if !safeguards::should_sign_proposal(&current_state, &proposal) {
                             info!(
                                 "prevented us from double signing a proposal at: {:?}",
                                 proposal
@@ -301,7 +301,7 @@ fn run_leader_loop_for_version<V: ProtocolVersion + Send + 'static>(
                         }
 
                         let current_state = cluster_clone.state_machine.read().unwrap().clone();
-                        if !should_sign_vote(&current_state, &vote) {
+                        if !safeguards::should_sign_vote(&current_state, &vote) {
                             info!("prevented us from double signing a vote at: {:?}", vote);
                             Response::SignedVote(<V as ProtocolVersion>::create_vote_response(
                                 None,
@@ -363,104 +363,3 @@ fn run_leader_loop_for_version<V: ProtocolVersion + Send + 'static>(
 
     Ok(())
 }
-
-/*
-A signer should only sign a proposal p if any of the following lines are true:
-
-    p.Height > s.Height (1)
-    p.Height == s.Height && p.Round > s.Round (2)
-
-In other words, a proposal should only be signed if it’s at a higher height, or a higher round for the same height. Once a proposal or vote has been signed for a given height and round, a proposal should never be signed for the same height and round.
-*/
-fn should_sign_proposal(state: &ConsensusData, proposal: &Proposal) -> bool {
-    let msg_ty = SignedMsgType::from(proposal.step);
-    if msg_ty != SignedMsgType::Proposal {
-        return false;
-    }
-
-    match (
-        proposal.height.cmp(&state.height),
-        proposal.round.cmp(&state.round),
-    ) {
-        // (1)
-        (Ordering::Greater, _) => true,
-
-        // (2)
-        (Ordering::Equal, Ordering::Greater) => true,
-
-        _ => false,
-    }
-}
-
-/*
-A signer should only sign a vote v if any of the following lines are true:
-
-    v.Height > s.Height (1)
-    v.Height == s.Height && v.Round > s.Round (2)
-    v.Height == s.Height && v.Round == s.Round && v.Step == 0x1 && s.Step == 0x20 (3)
-    v.Height == s.Height && v.Round == s.Round && v.Step == 0x2 && s.Step != 0x2 (4)
-
-In other words, a vote should only be signed if it’s:
-  - at a higher height
-  - at a higher round for the same height
-  - a prevote for the same height and round where we haven’t signed a prevote or precommit (but have signed a proposal)
-  - a precommit for the same height and round where we haven’t signed a precommit (but have signed a proposal and/or a prevote)
-*/
-fn should_sign_vote(state: &ConsensusData, vote: &Vote) -> bool {
-    info!("checking consensus state: {} against vote: {}", state, vote);
-    let vote_step = SignedMsgType::from(vote.step);
-    match (
-        vote.height.cmp(&state.height),
-        vote.round.cmp(&state.round),
-        vote_step,
-        state.step.into(),
-    ) {
-        // (1)
-        (Ordering::Greater, _, _, _) => true,
-
-        // (2)
-        (Ordering::Equal, Ordering::Greater, _, _) => true,
-
-        // (3)
-        (Ordering::Equal, Ordering::Equal, SignedMsgType::Prevote, SignedMsgType::Proposal) => true,
-
-        // (4)
-        (Ordering::Equal, Ordering::Equal, SignedMsgType::Precommit, stp)
-            if stp != SignedMsgType::Precommit =>
-        {
-            true
-        }
-
-        // everything else: don't sign
-        _ => false,
-    }
-}
-
-/*
-* func shouldSignVoteExtension(chainID string, signBz, extSignBz []byte) (bool, error) {
-   var vote cmtypes.CanonicalVote
-   if err := protoio.UnmarshalDelimited(signBz, &vote); err != nil {
-       return false, nil
-   }
-
-   if vote.Type == cmtypes.PrecommitType && vote.BlockID != nil && len(extSignBz) > 0 {
-       var ext cmtypes.CanonicalVoteExtension
-       if err := protoio.UnmarshalDelimited(extSignBz, &ext); err != nil {
-           return false, fmt.Errorf("failed to unmarshal vote extension: %w", err)
-       }
-
-       switch {
-       case ext.ChainId != chainID:
-           return false, fmt.Errorf("extension chain ID %s does not match expected %s", ext.ChainId, chainID)
-       case ext.Height != vote.Height:
-           return false, fmt.Errorf("extension height %d does not match vote height %d", ext.Height, vote.Height)
-       case ext.Round != vote.Round:
-           return false, fmt.Errorf("extension round %d does not match vote round %d", ext.Round, vote.Round)
-       }
-
-       return true, nil
-   }
-
-   return false, nil
-}
-*/

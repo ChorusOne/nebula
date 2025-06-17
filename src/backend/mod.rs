@@ -1,8 +1,8 @@
 pub mod vault;
 
+use crate::error::SignerError;
 use base64::{Engine as _, engine::general_purpose};
 use k256::ecdsa::signature::SignerMut;
-use nebula::SignerError;
 use std::fs;
 use std::path::Path;
 

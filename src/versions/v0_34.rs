@@ -1,4 +1,4 @@
-use nebula::SignerError;
+use crate::error::SignerError;
 
 use super::ProtocolVersion;
 use crate::backend::PublicKey;

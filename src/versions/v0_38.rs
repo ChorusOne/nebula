@@ -1,10 +1,10 @@
 use super::ProtocolVersion;
 use crate::backend::PublicKey;
+use crate::error::SignerError;
+use crate::proto::v0_38;
 use crate::protocol::{Request, Response};
 use crate::types::{BlockId, PartSetHeader, Proposal, SignedMsgType, Vote};
 use log::info;
-use nebula::SignerError;
-use nebula::proto::v0_38;
 use prost::Message;
 
 pub struct VersionV0_38;
@@ -183,7 +183,7 @@ impl ProtocolVersion for VersionV0_38 {
         error: Option<String>,
     ) -> Self::VoteResponse {
         v0_38::privval::SignedVoteResponse {
-            vote: vote.map(|vote| nebula::proto::v0_38::types::Vote {
+            vote: vote.map(|vote| crate::proto::v0_38::types::Vote {
                 r#type: vote.step.into(),
                 height: vote.height,
                 round: vote.round as i32,

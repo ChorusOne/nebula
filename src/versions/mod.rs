@@ -7,7 +7,7 @@ pub mod v0_37;
 pub mod v0_38;
 pub mod v1_0;
 
-use nebula::SignerError;
+use crate::error::SignerError;
 pub use v0_34::VersionV0_34;
 pub use v0_37::VersionV0_37;
 pub use v0_38::VersionV0_38;

@@ -1,7 +1,7 @@
+use crate::error::SignerError;
 use base64::Engine;
 use base64::engine::general_purpose;
 use log::info;
-use nebula::SignerError;
 use reqwest::blocking::{Client, ClientBuilder};
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde_json::Value;

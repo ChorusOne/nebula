@@ -1,6 +1,6 @@
+use crate::error::SignerError;
 use ed25519_consensus::SigningKey;
 use log::{error, info};
-use nebula::SignerError;
 use std::net::TcpStream;
 use std::thread::sleep;
 use std::time::Duration;

@@ -1,4 +1,4 @@
-use nebula::SignerError;
+use crate::SignerError;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -8,25 +8,25 @@ pub struct BlockId {
     pub parts: Option<PartSetHeader>,
 }
 
-impl From<BlockId> for nebula::proto::v1::types::BlockId {
-    fn from(block_id: BlockId) -> nebula::proto::v1::types::BlockId {
-        nebula::proto::v1::types::BlockId {
+impl From<BlockId> for crate::proto::v1::types::BlockId {
+    fn from(block_id: BlockId) -> crate::proto::v1::types::BlockId {
+        crate::proto::v1::types::BlockId {
             hash: block_id.hash.into(),
             part_set_header: Some(block_id.parts.unwrap().into()),
         }
     }
 }
 
-impl From<PartSetHeader> for nebula::proto::v1::types::PartSetHeader {
-    fn from(part_set_header: PartSetHeader) -> nebula::proto::v1::types::PartSetHeader {
-        nebula::proto::v1::types::PartSetHeader {
+impl From<PartSetHeader> for crate::proto::v1::types::PartSetHeader {
+    fn from(part_set_header: PartSetHeader) -> crate::proto::v1::types::PartSetHeader {
+        crate::proto::v1::types::PartSetHeader {
             total: part_set_header.total,
             hash: part_set_header.hash.into(),
         }
     }
 }
-impl From<nebula::proto::v1::types::BlockId> for BlockId {
-    fn from(block_id: nebula::proto::v1::types::BlockId) -> BlockId {
+impl From<crate::proto::v1::types::BlockId> for BlockId {
+    fn from(block_id: crate::proto::v1::types::BlockId) -> BlockId {
         BlockId {
             hash: block_id.hash.into(),
             parts: Some(block_id.part_set_header.unwrap().into()),
@@ -34,8 +34,8 @@ impl From<nebula::proto::v1::types::BlockId> for BlockId {
     }
 }
 
-impl From<nebula::proto::v1::types::PartSetHeader> for PartSetHeader {
-    fn from(part_set_header: nebula::proto::v1::types::PartSetHeader) -> PartSetHeader {
+impl From<crate::proto::v1::types::PartSetHeader> for PartSetHeader {
+    fn from(part_set_header: crate::proto::v1::types::PartSetHeader) -> PartSetHeader {
         PartSetHeader {
             total: part_set_header.total,
             hash: part_set_header.hash.into(),
@@ -49,15 +49,16 @@ pub struct PartSetHeader {
     pub hash: Vec<u8>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum SignedMsgType {
+    #[default]
     Unknown = 0,
     Prevote = 1,
     Precommit = 2,
     Proposal = 32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Vote {
     pub step: SignedMsgType,
     pub height: i64,
@@ -121,7 +122,7 @@ impl From<u8> for SignedMsgType {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Proposal {
     pub step: SignedMsgType,
     pub height: i64,

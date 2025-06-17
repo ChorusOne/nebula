@@ -1,9 +1,9 @@
 use crate::backend::SigningBackend;
+use crate::error::SignerError;
 use crate::protocol::{Request, Response};
 use crate::types::{BufferError, SignedMsgType};
 use crate::versions::ProtocolVersion;
 use log::info;
-use nebula::SignerError;
 use prost::Message as _;
 use std::io::{Read, Write};
 use std::marker::PhantomData;

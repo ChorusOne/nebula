@@ -1,10 +1,10 @@
 use super::ProtocolVersion;
 use crate::backend::PublicKey;
+use crate::error::SignerError;
+use crate::proto::v1;
 use crate::protocol::{Request, Response};
 use crate::types::{BlockId, PartSetHeader, Proposal, SignedMsgType, Vote};
 use log::info;
-use nebula::SignerError;
-use nebula::proto::v1;
 use prost::Message;
 
 pub struct VersionV1_0;
@@ -188,7 +188,7 @@ impl ProtocolVersion for VersionV1_0 {
         error: Option<String>,
     ) -> Self::VoteResponse {
         v1::privval::SignedVoteResponse {
-            vote: vote.map(|vote| nebula::proto::v1::types::Vote {
+            vote: vote.map(|vote| crate::proto::v1::types::Vote {
                 r#type: vote.step.into(),
                 height: vote.height,
                 round: vote.round as i32,
@@ -236,7 +236,7 @@ fn tendermint_vote_to_domain(vote: v1::types::Vote) -> Result<Vote, SignerError>
         round: vote.round as i64,
         timestamp: vote
             .timestamp
-            .map(|t| t.seconds /* * 1_000_000_000 */ + t.nanos as i64),
+            .map(|t| t.seconds * 1_000_000_000 + t.nanos as i64),
         block_id: vote.block_id.map(|id| BlockId {
             hash: id.hash.to_vec(),
             parts: id.part_set_header.map(|p| PartSetHeader {
