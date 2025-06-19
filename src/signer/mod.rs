@@ -27,6 +27,7 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
         }
     }
 
+    // TODO: the signing and sending sig should be split further
     pub fn process_request(
         &mut self,
         request: Request,
