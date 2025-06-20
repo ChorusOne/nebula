@@ -1,118 +1,66 @@
-// use crate::Signer;
-// // use crate::SigningBackend;
-// // use crate::handle_single_request;
-// use crate::types::BufferError;
-// use crate::versions::VersionV0_38;
-// use nebula::proto::v0_38;
-// use prost::Message;
-// use std::io::Cursor;
+use super::mock_connection::MockCometBFTConnection;
+use crate::backend::Ed25519Signer;
+use crate::proto::v0_38;
+use crate::protocol::Request;
+use crate::signer::Signer;
+use crate::types::SignedMsgType;
+use crate::versions::VersionV0_38;
+use prost::Message;
+use std::time::Duration;
 
-// struct Dummy;
+#[test]
+fn signer_with_mock_connection() {
+    let (mock_conn, handle) = MockCometBFTConnection::new();
 
-// impl SigningBackend for Dummy {
-//     fn sign(&self, _: &[u8]) -> Vec<u8> {
-//         vec![0xde, 0xad, 0xbe, 0xef]
-//     }
-//     fn public_key(&self) -> Vec<u8> {
-//         vec![1, 2, 3, 4]
-//     }
-// }
+    let backend = Ed25519Signer::from_key_file("./keys/privkey").unwrap();
 
-// type TestSigner = Signer<Dummy, VersionV0_38, Cursor<Vec<u8>>>;
+    let mut signer = Signer::<_, VersionV0_38, _>::new(backend, mock_conn, "test-chain".into());
 
-// // TODO: maybe this can be pulled in from actual code
-// fn create_ping_message() -> Vec<u8> {
-//     let msg = v0_38::privval::Message {
-//         sum: Some(v0_38::privval::message::Sum::PingRequest(
-//             v0_38::privval::PingRequest {},
-//         )),
-//     };
-//     let mut buf = Vec::new();
-//     msg.encode_length_delimited(&mut buf).unwrap();
-//     buf
-// }
+    let proposal_req = v0_38::privval::SignProposalRequest {
+        proposal: Some(v0_38::types::Proposal {
+            r#type: SignedMsgType::Proposal as i32,
+            height: 1,
+            round: 1,
+            ..Default::default()
+        }),
+        chain_id: "test-chain".to_string(),
+    };
+    let msg = v0_38::privval::Message {
+        sum: Some(v0_38::privval::message::Sum::SignProposalRequest(
+            proposal_req,
+        )),
+    };
+    let mut req_bytes = Vec::new();
+    msg.encode_length_delimited(&mut req_bytes).unwrap();
 
-// // #[test]
-// // fn ping_request() {
-// //     let ping_data = create_ping_message();
-// //     let mut s = TestSigner::new(Dummy, Cursor::new(ping_data), "test-chain".into());
+    handle.request_sender.send(req_bytes).unwrap();
 
-// //     assert!(handle_single_request(&mut s).is_ok());
-// // }
+    let request = signer.read_request().unwrap();
+    assert!(matches!(request, Request::SignProposal(_)));
 
-// #[test]
-// fn truncated_stream() {
-//     let s = TestSigner::new(Dummy, Cursor::new(vec![]), "test-chain".into());
-//     let ping_data = create_ping_message();
+    let response = signer.process_request(request).unwrap();
 
-//     let partial = &ping_data[..ping_data.len() - 1];
-//     let result = s.try_read_complete_message(partial);
-//     assert!(matches!(result, Err(BufferError::NeedMoreBytes)));
-// }
+    signer.send_response(response).unwrap();
 
-// #[test]
-// fn normal_stream() {
-//     let mut s = TestSigner::new(
-//         Dummy,
-//         Cursor::new(create_ping_message()),
-//         "test-chain".into(),
-//     );
-//     let ping_data = create_ping_message();
+    let response_bytes = handle
+        .response_receiver
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap();
+    let response_msg =
+        v0_38::privval::Message::decode_length_delimited(response_bytes.as_slice()).unwrap();
 
-//     let result = s.read_complete_message();
-//     let res2 = result.unwrap();
-//     assert_eq!(res2, ping_data);
-// }
-
-// #[test]
-// fn additional_data() {
-//     let mut s = TestSigner::new(Dummy, Cursor::new(vec![]), "test-chain".into());
-//     let ping1 = create_ping_message();
-//     let ping2 = create_ping_message();
-//     let combined = [ping1.clone(), ping2].concat();
-//     s.read_buffer = combined;
-
-//     let result = s.read_complete_message();
-//     assert_eq!(result.unwrap(), ping1);
-// }
-
-// #[test]
-// fn empty_buffer() {
-//     let s = TestSigner::new(Dummy, Cursor::new(vec![]), "test-chain".into());
-//     let result = s.try_read_complete_message(&[]);
-//     assert!(matches!(result, Err(BufferError::NeedMoreBytes)));
-// }
-
-// #[test]
-// fn partial_bodt() {
-//     let s = TestSigner::new(Dummy, Cursor::new(vec![]), "test-chain".into());
-//     let ping_data = create_ping_message();
-
-//     let partial_len = if ping_data.len() > 2 { 2 } else { 1 };
-//     let result = s.try_read_complete_message(&ping_data[..partial_len]);
-//     assert!(matches!(result, Err(BufferError::NeedMoreBytes)));
-// }
-
-// #[test]
-// fn basic_test() {
-//     let ping_data = create_ping_message();
-//     let mut s = TestSigner::new(Dummy, Cursor::new(ping_data.clone()), "test-chain".into());
-
-//     let result = s.read_complete_message().unwrap();
-//     assert_eq!(result, ping_data);
-// }
-
-// #[test]
-// fn multiple_messages_in_buffer() {
-//     let ping1 = create_ping_message();
-//     let ping2 = create_ping_message();
-//     let combined = [ping1.clone(), ping2.clone()].concat();
-
-//     let mut s = TestSigner::new(Dummy, Cursor::new(combined), "test-chain".into());
-
-//     let msg1 = s.read_complete_message().unwrap();
-//     assert_eq!(msg1, ping1);
-
-//     let msg2 = s.read_complete_message().unwrap();
-//     assert_eq!(msg2, ping2);
-// }
+    match response_msg.sum {
+        Some(v0_38::privval::message::Sum::SignedProposalResponse(res)) => {
+            assert!(res.error.is_none());
+            let signed_proposal = res.proposal.unwrap();
+            assert_eq!(signed_proposal.height, 1);
+            assert_eq!(signed_proposal.round, 1);
+            assert!(
+                !signed_proposal.signature.is_empty(),
+                "Signature should not be empty"
+            );
+            println!("Got signature: {}", hex::encode(&signed_proposal.signature));
+        }
+        _ => panic!("Expected a SignedProposalResponse"),
+    }
+}

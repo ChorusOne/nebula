@@ -4,9 +4,10 @@ use crate::error::SignerError;
 use crate::proto::v0_38;
 use crate::protocol::{Request, Response};
 use crate::types::{BlockId, PartSetHeader, Proposal, SignedMsgType, Vote};
-use log::info;
+use log::{info, trace};
 use prost::Message;
 
+// TODO: either keep chain_id here or add it to the domain Vote
 pub struct VersionV0_38;
 
 impl ProtocolVersion for VersionV0_38 {
@@ -91,7 +92,7 @@ impl ProtocolVersion for VersionV0_38 {
     }
 
     fn vote_to_bytes(vote: &Vote, chain_id: &str) -> Result<Vec<u8>, SignerError> {
-        info!("changing vote to bytes, block id: {:?}", vote.block_id);
+        trace!("changing vote to bytes, block id: {:?}", vote.block_id);
 
         let canonical = v0_38::types::CanonicalVote {
             r#type: vote.step as i32,
@@ -131,7 +132,7 @@ impl ProtocolVersion for VersionV0_38 {
 
     fn vote_extension_to_bytes(vote: &Vote, chain_id: &str) -> Result<Vec<u8>, SignerError> {
         // todo: vote extension has to match what's in the vote
-        // possibly can be different if theres a bug
+        // possibly can be different if theres a bug in the blockchain node
         let copied = vote.clone();
         let canonical = v0_38::types::CanonicalVoteExtension {
             extension: copied.extension.into(),
@@ -153,7 +154,7 @@ impl ProtocolVersion for VersionV0_38 {
         v0_38::privval::SignedProposalResponse {
             proposal: proposal.map(|proposal| v0_38::types::Proposal {
                 r#type: proposal.step as i32,
-                height: proposal.height as i64,
+                height: proposal.height,
                 round: proposal.round as i32,
                 pol_round: proposal.pol_round as i32,
                 block_id: proposal.block_id.map(|id| v0_38::types::BlockId {
@@ -317,7 +318,7 @@ mod tests {
     }
 
     #[test]
-    fn test_proposal_to_bytes_matches_go_implementation() {
+    fn proposal_to_bytes_matches_go_implementation() {
         let proposal = create_test_proposal();
         let chain_id = "testing";
 
@@ -333,7 +334,7 @@ mod tests {
     }
 
     #[test]
-    fn test_canonical_proposal_encoding() {
+    fn canonical_proposal_encoding() {
         let expected_bytes = hex::decode("77082011010000000000000020ffffffffffffffffff012a480a205b67e0b0a8ad775ec8384810bdcb2dcbf053dae67ea288c0b7bb9df367648c431224080112205cfdce21a1326d26fd397a31ce964b968f743c07a68e2189c95741c9debd5355320c08ffd0e0c10610989ff9c5023a0774657374696e67").unwrap();
 
         let canonical =
@@ -362,7 +363,7 @@ mod tests {
     }
 
     #[test]
-    fn test_full_signing_flow() {
+    fn full_signing_flow() {
         let test_signer = Ed25519Signer::from_key_file("./keys/privkey");
 
         let proposal = create_test_proposal();

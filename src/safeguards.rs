@@ -1,7 +1,6 @@
 use std::cmp::Ordering;
 
 use log::info;
-use reqwest::header::SERVER;
 
 use crate::types::{ConsensusData, Proposal, SignedMsgType, Vote};
 
@@ -14,12 +13,11 @@ A signer should only sign a proposal p if any of the following lines are true:
 In other words, a proposal should only be signed if it’s at a higher height, or a higher round for the same height. Once a proposal or vote has been signed for a given height and round, a proposal should never be signed for the same height and round.
 */
 pub fn should_sign_proposal(state: &ConsensusData, proposal: &Proposal) -> bool {
-    let msg_ty = SignedMsgType::from(proposal.step);
-    if msg_ty != SignedMsgType::Proposal {
+    if proposal.step != SignedMsgType::Proposal {
         return false;
     }
 
-    println!(
+    info!(
         "checking if proposal should be signed, state: {}, proposal: {}/{}/{}",
         state, proposal.height, proposal.round, proposal.step as u8
     );
@@ -52,8 +50,11 @@ In other words, a vote should only be signed if it’s:
   - a precommit for the same height and round where we haven’t signed a precommit (but have signed a proposal and/or a prevote)
 */
 pub fn should_sign_vote(state: &ConsensusData, vote: &Vote) -> bool {
-    info!("checking consensus state: {} against vote: {}", state, vote);
-    let vote_step = SignedMsgType::from(vote.step);
+    info!(
+        "checking if vote should be signed, state: {}, proposal: {}/{}/{}",
+        state, vote.height, vote.round, vote.step as u8
+    );
+    let vote_step = vote.step;
     match (
         vote.height.cmp(&state.height),
         vote.round.cmp(&state.round),
@@ -111,7 +112,7 @@ pub fn should_sign_vote(state: &ConsensusData, vote: &Vote) -> bool {
 */
 
 #[test]
-fn test_should_sign_proposal_logic() {
+fn should_sign_proposal_logic() {
     let mut state = ConsensusData {
         height: 10,
         round: 1,
@@ -162,7 +163,7 @@ fn test_should_sign_proposal_logic() {
 }
 
 #[test]
-fn test_should_sign_vote_logic() {
+fn should_sign_vote_logic() {
     let state = ConsensusData {
         height: 10,
         round: 1,

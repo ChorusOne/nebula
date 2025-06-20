@@ -4,7 +4,7 @@ use crate::error::SignerError;
 use crate::proto::v1;
 use crate::protocol::{Request, Response};
 use crate::types::{BlockId, PartSetHeader, Proposal, SignedMsgType, Vote};
-use log::info;
+use log::{info, trace};
 use prost::Message;
 
 pub struct VersionV1_0;
@@ -96,7 +96,7 @@ impl ProtocolVersion for VersionV1_0 {
     }
 
     fn vote_to_bytes(vote: &Vote, chain_id: &str) -> Result<Vec<u8>, SignerError> {
-        info!("changing vote to bytes, block id: {:?}", vote.block_id);
+        trace!("changing vote to bytes, block id: {:?}", vote.block_id);
 
         let canonical = v1::types::CanonicalVote {
             r#type: vote.step as i32,
@@ -158,7 +158,7 @@ impl ProtocolVersion for VersionV1_0 {
         v1::privval::SignedProposalResponse {
             proposal: proposal.map(|proposal| v1::types::Proposal {
                 r#type: proposal.step as i32,
-                height: proposal.height as i64,
+                height: proposal.height,
                 round: proposal.round as i32,
                 pol_round: proposal.pol_round as i32,
                 block_id: proposal.block_id.map(|id| v1::types::BlockId {
@@ -211,7 +211,6 @@ impl ProtocolVersion for VersionV1_0 {
     }
 
     fn create_pub_key_response(pub_key: PublicKey) -> Self::PubKeyResponse {
-        // TODO: different key types!
         v1::privval::PubKeyResponse {
             error: None,
             pub_key_bytes: pub_key.bytes.into(),

@@ -9,7 +9,7 @@ use std::path::Path;
 const KEY_HARD_STATE: &[u8] = b"hard_state";
 const KEY_CONF_STATE: &[u8] = b"conf_state";
 const KEY_LAST_INDEX: &[u8] = b"last_index";
-const KEY_STATE_MACHINE: &[u8] = b"state_machine";
+const KEY_SIGNER_STATE: &[u8] = b"state_machine";
 
 fn entry_key(index: u64) -> Vec<u8> {
     format!("entry:{}", index).into_bytes()
@@ -27,10 +27,10 @@ impl RaftStorage {
         RaftStorage { db }
     }
 
-    pub fn get_state_machine(&self) -> raft::Result<ConsensusData> {
+    pub fn set_signer_state(&self) -> raft::Result<ConsensusData> {
         match self
             .db
-            .get(KEY_STATE_MACHINE)
+            .get(KEY_SIGNER_STATE)
             .map_err(|e| RaftError::Store(StorageError::Other(Box::new(e))))?
         {
             Some(bytes) => Ok(ConsensusData::from_bytes(&bytes).unwrap_or_default()),
@@ -38,10 +38,10 @@ impl RaftStorage {
         }
     }
 
-    pub fn set_state_machine(&self, sm: &ConsensusData) -> raft::Result<()> {
+    pub fn get_signer_state(&self, sm: &ConsensusData) -> raft::Result<()> {
         let value = sm.to_bytes();
         self.db
-            .put(KEY_STATE_MACHINE, &value)
+            .put(KEY_SIGNER_STATE, &value)
             .map_err(|e| RaftError::Store(StorageError::Other(Box::new(e))))
     }
 
@@ -57,7 +57,7 @@ impl RaftStorage {
         }
         if let Some(last_entry) = entries.last() {
             self.db
-                .put(KEY_LAST_INDEX, &last_entry.get_index().to_be_bytes())
+                .put(KEY_LAST_INDEX, last_entry.get_index().to_be_bytes())
                 .map_err(|e| RaftError::Store(StorageError::Other(Box::new(e))))?;
         }
         Ok(())
@@ -91,7 +91,7 @@ impl RaftStorage {
         let index = meta.get_index();
 
         if let Some(sm_data) = ConsensusData::from_bytes(snapshot.get_data()) {
-            self.set_state_machine(&sm_data)?;
+            self.get_signer_state(&sm_data)?;
         }
 
         self.set_conf_state(meta.get_conf_state().clone())?;
@@ -102,7 +102,7 @@ impl RaftStorage {
         self.set_hard_state(hs)?;
 
         self.db
-            .put(KEY_LAST_INDEX, &index.to_be_bytes())
+            .put(KEY_LAST_INDEX, index.to_be_bytes())
             .map_err(|e| RaftError::Store(StorageError::Other(Box::new(e))))?;
         Ok(())
     }
@@ -221,7 +221,7 @@ impl Storage for RaftStorage {
             .mut_metadata()
             .set_term(state.hard_state.get_term());
 
-        let sm_data = self.get_state_machine()?;
+        let sm_data = self.set_signer_state()?;
         snapshot.set_data(sm_data.to_bytes().into());
 
         Ok(snapshot)

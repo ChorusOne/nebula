@@ -1,6 +1,7 @@
 chain_id         = "testing"
 version          = "v0_38"
 signing_mode     = "vault"
+log_level        = "info"
 
 [raft]
 node_id      = 1

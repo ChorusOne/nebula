@@ -1,3 +1,5 @@
+#[allow(dead_code)]
+#[allow(unused)]
 pub mod cometbft {
 
     pub mod version {
@@ -42,6 +44,7 @@ pub mod cometbft {
     }
 }
 
+#[allow(unused_imports)]
 pub mod v0_34 {
     pub use crate::proto::cometbft::crypto::v1 as crypto;
     // pub use crate::proto::cometbft::p2p::v1 as p2p;
@@ -49,6 +52,7 @@ pub mod v0_34 {
     pub use crate::proto::cometbft::types::v1beta1 as types;
 }
 
+#[allow(unused_imports)]
 pub mod v0_37 {
     pub use crate::proto::cometbft::crypto::v1 as crypto;
     // pub use crate::proto::cometbft::p2p::v1 as p2p;
@@ -63,6 +67,7 @@ pub mod v0_38 {
     pub use crate::proto::cometbft::types::v1 as types;
 }
 
+#[allow(unused_imports)]
 pub mod v1 {
     pub use crate::proto::cometbft::crypto::v1 as crypto;
     // pub use crate::proto::cometbft::p2p::v1 as p2p;

@@ -186,7 +186,7 @@ impl std::fmt::Display for ConsensusData {
 }
 
 impl ConsensusData {
-    pub fn persist_to_file(&self, path: &std::path::Path) -> std::io::Result<()> {
+    pub fn _persist_to_file(&self, path: &std::path::Path) -> std::io::Result<()> {
         let json = serde_json::to_string_pretty(self)?;
         let temp_path = path.with_extension("json.tmp");
         std::fs::write(&temp_path, json)?;
@@ -197,8 +197,8 @@ impl ConsensusData {
         let json = std::fs::read_to_string(path).ok()?;
         serde_json::from_str(&json).ok()
     }
-    pub fn to_bytes(&self) -> Vec<u8> {
-        serde_json::to_vec(self).unwrap()
+    pub fn to_bytes(self) -> Vec<u8> {
+        serde_json::to_vec(&self).unwrap()
     }
 
     pub fn from_bytes(buf: &[u8]) -> Option<ConsensusData> {

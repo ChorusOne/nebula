@@ -1,22 +1,29 @@
-private_key_path = "./configs/privkey-2"
-chain_id         = "osmo-test-5"
+chain_id         = "testing"
 version          = "v0_38"
-node_id          = 4000
-peers            = []
-cluster_port     = 50003
-state_file       = "./configs/consensus_state.json"
-signing_mode = "vault"
+signing_mode     = "vault"
+log_level        = "debug"
+
+[raft]
+node_id      = 1
+bind_addr    = "127.0.0.1:7001"
+data_path   = "./cluster-data/state_node1.json"
+initial_state_path = ""
+
+[[raft.peers]]
+id = 1
+addr = "127.0.0.1:7001"
+
+[[connections]]
+host              = "192.168.0.5"
+port              = 36558
 
 [[connections]]
 host              = "192.168.0.5"
 port              = 26558
-identity_key_path = "./configs/privkey-2"
-
 
 [signing.vault]
 address      = "http://127.0.0.1:8200"
 token        = "root"
 transit_path = "transit"
 key_name     = "validator-key-simd"
-cacert       = ""
-skip_verify  = false
+skip_verify  = true

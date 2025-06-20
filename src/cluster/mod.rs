@@ -22,21 +22,19 @@ use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 enum RaftMessage {
     Propose(ConsensusData, Sender<Result<(), SignerError>>),
     Msg(RaftProtoMessage),
+    TransferLeadership(u64),
 }
 
-pub struct Cluster {
-    pub state_machine: Arc<RwLock<ConsensusData>>,
+pub struct SignerRaftNode {
+    node_id: u64,
+    pub signer_state: Arc<RwLock<ConsensusData>>,
     proposal_sender: Sender<RaftMessage>,
     raft_state: Arc<RwLock<(StateRole, u64)>>,
 }
 
-impl Cluster {
+impl SignerRaftNode {
     pub fn new(config: RaftConfig) -> Arc<Self> {
-        let decorator = slog_term::TermDecorator::new().build();
-        let drain = slog_term::FullFormat::new(decorator)
-            .build()
-            .filter_level(slog::Level::Info)
-            .fuse();
+        let drain = slog_stdlog::StdLog.fuse();
         let drain = slog_async::Async::new(drain)
             .chan_size(4096)
             .overflow_strategy(slog_async::OverflowStrategy::Block)
@@ -70,17 +68,17 @@ impl Cluster {
                         "[init] loaded bootstrap state from state.json: {}",
                         bootstrap_state
                     );
-                    storage.set_state_machine(&bootstrap_state).unwrap();
+                    storage.get_signer_state(&bootstrap_state).unwrap();
                     bootstrap_state
                 } else {
                     info!("[init] no state.json found, using default state.");
                     let default_state = ConsensusData::default();
-                    storage.set_state_machine(&default_state).unwrap();
+                    storage.get_signer_state(&default_state).unwrap();
                     default_state
                 }
             } else {
                 info!("[init] found existing state, loading from DB");
-                storage.get_state_machine().unwrap()
+                storage.set_signer_state().unwrap()
             };
 
         let raft_cfg = RaftCoreConfig {
@@ -99,7 +97,8 @@ impl Cluster {
             let bind = config.bind_addr.clone();
             let in_tx_clone = in_tx.clone();
             thread::spawn(move || {
-                let listener = TcpListener::bind(&bind).expect("bind failed");
+                let listener =
+                    TcpListener::bind(&bind).unwrap_or_else(|_| panic!("bind failed on {}", bind));
                 info!("[net] listening on {}", bind);
                 for conn in listener.incoming() {
                     if let Ok(stream) = conn {
@@ -188,8 +187,8 @@ impl Cluster {
 
         let mut raft_node = RawNode::new(&raft_cfg, storage, &logger).unwrap();
 
-        let state_machine = Arc::new(RwLock::new(initial_sm_state));
-        let sm_clone = Arc::clone(&state_machine);
+        let signer_state = Arc::new(RwLock::new(initial_sm_state));
+        let sm_clone = Arc::clone(&signer_state);
         let state_clone = Arc::clone(&raft_state);
 
         thread::spawn(move || {
@@ -206,6 +205,9 @@ impl Cluster {
                     }
                     Ok(RaftMessage::Msg(m)) => {
                         let _ = raft_node.step(m);
+                    }
+                    Ok(RaftMessage::TransferLeadership(transferee_id)) => {
+                        raft_node.transfer_leader(transferee_id);
                     }
                     Err(RecvTimeoutError::Timeout) => {}
                     Err(RecvTimeoutError::Disconnected) => break,
@@ -230,10 +232,11 @@ impl Cluster {
             }
         });
 
-        Arc::new(Cluster {
-            state_machine,
+        Arc::new(SignerRaftNode {
+            signer_state: signer_state,
             proposal_sender: in_tx,
             raft_state,
+            node_id: config.node_id,
         })
     }
 
@@ -254,7 +257,10 @@ impl Cluster {
 
         match rx.recv_timeout(Duration::from_secs(5)) {
             Ok(Ok(())) => {
-                info!("[api] replication successful");
+                info!(
+                    "[api] replication successful, propagated state: {}",
+                    new_state
+                );
                 Ok(())
             }
             Ok(Err(e)) => {
@@ -278,11 +284,35 @@ impl Cluster {
         let state = self.raft_state.read().unwrap();
         if state.1 == 0 { None } else { Some(state.1) }
     }
+
+    #[allow(dead_code)] // TODO
+    pub fn node_id(&self) -> u64 {
+        self.node_id
+    }
+
+    #[allow(dead_code)] // TODO
+    pub fn transfer_leadership(&self, transferee_id: u64) -> Result<(), SignerError> {
+        info!("[api] transferring leadership to node {}", transferee_id);
+        if !self.is_leader() {
+            return Err(SignerError::Other(
+                "This node is not the leader, cannot transfer leadership".to_string(),
+            ));
+        }
+
+        self.proposal_sender
+            .send(RaftMessage::TransferLeadership(transferee_id))
+            .map_err(|e| {
+                SignerError::Other(format!(
+                    "Failed to send leadership transfer request to raft thread: {}",
+                    e
+                ))
+            })
+    }
 }
 
 fn on_ready(
     raft_group: &mut RawNode<RaftStorage>,
-    state_machine: &Arc<RwLock<ConsensusData>>,
+    signer_state: &Arc<RwLock<ConsensusData>>,
     net_tx: &Sender<RaftProtoMessage>,
     raft_state: &Arc<RwLock<(StateRole, u64)>>,
     proposal_callbacks: &mut VecDeque<Sender<Result<(), SignerError>>>,
@@ -327,7 +357,7 @@ fn on_ready(
                 "[on_ready] loaded state machine from snapshot: {:?}",
                 sm_data
             );
-            *state_machine.write().unwrap() = sm_data;
+            *signer_state.write().unwrap() = sm_data;
         }
     }
 
@@ -350,7 +380,7 @@ fn on_ready(
         handle_committed_entries(
             raft_group,
             ready.take_committed_entries(),
-            state_machine,
+            signer_state,
             proposal_callbacks,
         );
     }
@@ -365,7 +395,7 @@ fn on_ready(
         handle_committed_entries(
             raft_group,
             light_rd.take_committed_entries(),
-            state_machine,
+            signer_state,
             proposal_callbacks,
         );
     }
@@ -376,7 +406,7 @@ fn on_ready(
 fn handle_committed_entries(
     raft_group: &mut RawNode<RaftStorage>,
     committed_entries: Vec<raft_proto::eraftpb::Entry>,
-    state_machine: &Arc<RwLock<ConsensusData>>,
+    signer_state: &Arc<RwLock<ConsensusData>>,
     proposal_callbacks: &mut VecDeque<Sender<Result<(), SignerError>>>,
 ) {
     for ent in committed_entries {
@@ -385,8 +415,8 @@ fn handle_committed_entries(
                 if !ent.get_data().is_empty() {
                     if let Some(ns) = ConsensusData::from_bytes(ent.get_data()) {
                         info!("[on_ready] applying normal entry: {:?}", ns);
-                        *state_machine.write().unwrap() = ns;
-                        raft_group.mut_store().set_state_machine(&ns).unwrap();
+                        *signer_state.write().unwrap() = ns;
+                        raft_group.mut_store().get_signer_state(&ns).unwrap();
 
                         if let Some(callback) = proposal_callbacks.pop_front() {
                             if let Err(e) = callback.send(Ok(())) {
@@ -409,3 +439,9 @@ fn handle_committed_entries(
         }
     }
 }
+
+#[cfg(test)]
+mod integration_tests;
+
+#[cfg(test)]
+mod tests;

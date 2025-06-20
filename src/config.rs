@@ -20,6 +20,7 @@ pub struct RaftConfig {
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Config {
+    pub log_level: String,
     pub chain_id: String,
     pub version: ProtocolVersionConfig,
     pub connections: Vec<ConnectionConfig>,
@@ -56,15 +57,11 @@ impl Config {
 
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Clone)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum SigningMode {
     Vault,
+    #[default]
     Native,
-}
-
-impl Default for SigningMode {
-    fn default() -> Self {
-        SigningMode::Native
-    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Default, Clone)]

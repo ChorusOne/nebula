@@ -3,7 +3,7 @@ use crate::error::SignerError;
 use crate::protocol::{Request, Response};
 use crate::types::{BufferError, SignedMsgType};
 use crate::versions::ProtocolVersion;
-use log::info;
+use log::{debug, info};
 use prost::Message as _;
 use std::io::{Read, Write};
 use std::marker::PhantomData;
@@ -27,7 +27,7 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
         }
     }
 
-    // TODO: the signing and sending sig should be split further
+    // TODO: the signing and sending sig should be split further maybe?
     pub fn process_request(
         &mut self,
         request: Request,
@@ -39,8 +39,8 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
             Request::SignProposal(proposal) => {
                 let signable_data = V::proposal_to_bytes(&proposal, &self.chain_id)?;
                 let signature = self.signer.sign(&signable_data).unwrap();
-                info!("Signature: {}", hex::encode(&signature));
-                info!("Signable data: {}", hex::encode(&signable_data));
+                debug!("Signature: {}", hex::encode(&signature));
+                debug!("Signable data: {}", hex::encode(&signable_data));
 
                 Response::SignedProposal(V::create_proposal_response(
                     Some(proposal.clone()),
@@ -50,22 +50,29 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
             }
             Request::SignVote(vote) => {
                 // TODO: chain id should be parsed from the request, and compared to what we're expecting
+                // ^ no chain_id in the request. if we configure wrong chain_id in the config
+                // ^ actually it IS in the request and it IS in the canonical vote / proposal
+                // i just dropped it somewhere
                 let signable_data = V::vote_to_bytes(&vote, &self.chain_id)?;
                 let signature = self.signer.sign(&signable_data).unwrap();
                 // todo: go version also checked for non-zero-length vote extension sign bytes
                 // todo: go version also checked for non-nil block id
                 let extension_signable_data = V::vote_extension_to_bytes(&vote, &self.chain_id)?;
                 if vote.step == SignedMsgType::Precommit
-                    && extension_signable_data.len() > 0
-                    && !vote.block_id.clone().unwrap().hash.is_empty()
+                    && !extension_signable_data.is_empty()
+                    && vote
+                        .block_id
+                        .as_ref()
+                        .map(|id| !id.hash.is_empty())
+                        .unwrap_or(false)
                 {
                     info!("it's a precommit, we will sign the vote ext");
                     let ext_signature = self.signer.sign(&extension_signable_data).unwrap();
-                    info!(
+                    debug!(
                         "Extension signable data: {}",
                         hex::encode(&extension_signable_data)
                     );
-                    info!("Extension signature: {}", hex::encode(&ext_signature));
+                    debug!("Extension signature: {}", hex::encode(&ext_signature));
                     return Ok(Response::SignedVote(V::create_vote_response(
                         Some(vote.clone()),
                         signature,
@@ -74,8 +81,8 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
                     )));
                 }
                 info!("no vote ext this time");
-                info!("Signature: {}", hex::encode(&signature));
-                info!("Signable data: {}", hex::encode(&signable_data));
+                debug!("Signature: {}", hex::encode(&signature));
+                debug!("Signable data: {}", hex::encode(&signable_data));
                 Response::SignedVote(V::create_vote_response(
                     Some(vote.clone()),
                     signature,
@@ -151,6 +158,9 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+pub mod mock_connection;
 
 #[cfg(test)]
 mod tests;
