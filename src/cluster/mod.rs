@@ -2,13 +2,14 @@ mod storage;
 
 use crate::cluster::storage::RaftStorage;
 use crate::config::RaftConfig;
+use crate::error::SignerError;
 use crate::types::ConsensusData;
 use log::{info, warn};
 use protobuf::Message as ProtobufMessage;
 use raft::prelude::{ConfState, EntryType, Message as RaftProtoMessage, Snapshot};
 use raft::{Config as RaftCoreConfig, RawNode, StateRole, Storage};
 use slog::{Drain, o};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
@@ -19,7 +20,7 @@ use std::time::{Duration, Instant};
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 
 enum RaftMessage {
-    Propose(ConsensusData),
+    Propose(ConsensusData, Sender<Result<(), SignerError>>),
     Msg(RaftProtoMessage),
 }
 
@@ -195,10 +196,13 @@ impl Cluster {
             let mut last_tick = Instant::now();
             let mut timeout = Duration::from_millis(100);
 
+            let mut proposal_callbacks: VecDeque<Sender<Result<(), SignerError>>> = VecDeque::new();
+
             loop {
                 match in_rx.recv_timeout(timeout) {
-                    Ok(RaftMessage::Propose(data)) => {
+                    Ok(RaftMessage::Propose(data, callback)) => {
                         let _ = raft_node.propose(vec![], data.to_bytes());
+                        proposal_callbacks.push_back(callback);
                     }
                     Ok(RaftMessage::Msg(m)) => {
                         let _ = raft_node.step(m);
@@ -216,7 +220,13 @@ impl Cluster {
                     timeout -= elapsed;
                 }
 
-                on_ready(&mut raft_node, &sm_clone, &out_tx, &state_clone);
+                on_ready(
+                    &mut raft_node,
+                    &sm_clone,
+                    &out_tx,
+                    &state_clone,
+                    &mut proposal_callbacks,
+                );
             }
         });
 
@@ -227,14 +237,37 @@ impl Cluster {
         })
     }
 
-    pub fn replicate_state(&self, new_state: ConsensusData) -> Result<(), String> {
-        info!("[api] replicate {:?}", new_state);
+    pub fn replicate_state(&self, new_state: ConsensusData) -> Result<(), SignerError> {
+        info!("[api] replicating state: {:?}", new_state);
         if !self.is_leader() {
-            return Err("This node is not the leader".to_string());
+            return Err(SignerError::Other(
+                "This node is not the leader".to_string(),
+            ));
         }
+
+        let (tx, rx) = mpsc::channel();
         self.proposal_sender
-            .send(RaftMessage::Propose(new_state))
-            .map_err(|e| e.to_string())
+            .send(RaftMessage::Propose(new_state, tx))
+            .map_err(|e| {
+                SignerError::Other(format!("Failed to send proposal to raft thread: {}", e))
+            })?;
+
+        match rx.recv_timeout(Duration::from_secs(5)) {
+            Ok(Ok(())) => {
+                info!("[api] replication successful");
+                Ok(())
+            }
+            Ok(Err(e)) => {
+                warn!("[api] replication failed: {:?}", e);
+                Err(e)
+            }
+            Err(_) => {
+                warn!("[api] replication timed out");
+                Err(SignerError::Other(
+                    "State replication timed out".to_string(),
+                ))
+            }
+        }
     }
 
     pub fn is_leader(&self) -> bool {
@@ -252,6 +285,7 @@ fn on_ready(
     state_machine: &Arc<RwLock<ConsensusData>>,
     net_tx: &Sender<RaftProtoMessage>,
     raft_state: &Arc<RwLock<(StateRole, u64)>>,
+    proposal_callbacks: &mut VecDeque<Sender<Result<(), SignerError>>>,
 ) {
     if !raft_group.has_ready() {
         return;
@@ -260,6 +294,21 @@ fn on_ready(
     let mut ready = raft_group.ready();
 
     if let Some(ss) = ready.ss() {
+        let was_leader = raft_state.read().unwrap().0 == StateRole::Leader;
+        let is_leader = ss.raft_state == StateRole::Leader;
+
+        if was_leader && !is_leader {
+            warn!(
+                "[on_ready] leadership lost, failing {} pending proposals",
+                proposal_callbacks.len()
+            );
+            for callback in proposal_callbacks.drain(..) {
+                let _ = callback.send(Err(SignerError::Other(
+                    "Lost leadership during replication".into(),
+                )));
+            }
+        }
+
         let mut state = raft_state.write().unwrap();
         state.0 = ss.raft_state;
         state.1 = ss.leader_id;
@@ -298,7 +347,12 @@ fn on_ready(
     }
 
     if !ready.committed_entries().is_empty() {
-        handle_committed_entries(raft_group, ready.take_committed_entries(), state_machine);
+        handle_committed_entries(
+            raft_group,
+            ready.take_committed_entries(),
+            state_machine,
+            proposal_callbacks,
+        );
     }
 
     let mut light_rd = raft_group.advance(ready);
@@ -308,7 +362,12 @@ fn on_ready(
     }
 
     if !light_rd.committed_entries().is_empty() {
-        handle_committed_entries(raft_group, light_rd.take_committed_entries(), state_machine);
+        handle_committed_entries(
+            raft_group,
+            light_rd.take_committed_entries(),
+            state_machine,
+            proposal_callbacks,
+        );
     }
 
     raft_group.advance_apply();
@@ -318,6 +377,7 @@ fn handle_committed_entries(
     raft_group: &mut RawNode<RaftStorage>,
     committed_entries: Vec<raft_proto::eraftpb::Entry>,
     state_machine: &Arc<RwLock<ConsensusData>>,
+    proposal_callbacks: &mut VecDeque<Sender<Result<(), SignerError>>>,
 ) {
     for ent in committed_entries {
         match ent.get_entry_type() {
@@ -327,6 +387,12 @@ fn handle_committed_entries(
                         info!("[on_ready] applying normal entry: {:?}", ns);
                         *state_machine.write().unwrap() = ns;
                         raft_group.mut_store().set_state_machine(&ns).unwrap();
+
+                        if let Some(callback) = proposal_callbacks.pop_front() {
+                            if let Err(e) = callback.send(Ok(())) {
+                                warn!("[on_ready] failed to send commit confirmation: {:?}", e);
+                            }
+                        }
                     }
                 }
             }

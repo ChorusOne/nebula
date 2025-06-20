@@ -249,7 +249,7 @@ fn run_leader_loop_for_version<V: ProtocolVersion + Send + 'static>(
                     port_num,
                     req
                 );
-                let start = Instant::now(); // we
+                let received = Instant::now(); // we
 
                 let response = match req {
                     Request::SignProposal(proposal) => {
@@ -332,7 +332,7 @@ fn run_leader_loop_for_version<V: ProtocolVersion + Send + 'static>(
 
                     other => signer_instance.process_request(other)?,
                 };
-                info!("Request processed. Took: {:?}", start.elapsed());
+                info!("Request processed. Took: {:?}", received.elapsed());
 
                 match signer_instance.send_response(response) {
                     Ok(()) => {}
@@ -344,8 +344,8 @@ fn run_leader_loop_for_version<V: ProtocolVersion + Send + 'static>(
                     }
                 }
                 info!(
-                    "Sent response! Sending the response took: {:?}",
-                    start.elapsed()
+                    "Sent response! Handling the whole response request took: {:?}",
+                    received.elapsed()
                 );
             }
 
