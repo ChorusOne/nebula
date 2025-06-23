@@ -7,7 +7,7 @@ use crate::types::{BlockId, PartSetHeader, Proposal, SignedMsgType, Vote};
 use log::{info, trace};
 use prost::Message;
 
-// TODO: either keep chain_id here or add it to the domain Vote
+// TODO: either keep chain_id here or add it to the domain Vote/Proposal
 pub struct VersionV0_38;
 
 impl ProtocolVersion for VersionV0_38 {

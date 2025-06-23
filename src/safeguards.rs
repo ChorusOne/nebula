@@ -51,7 +51,7 @@ In other words, a vote should only be signed if it’s:
 */
 pub fn should_sign_vote(state: &ConsensusData, vote: &Vote) -> bool {
     info!(
-        "checking if vote should be signed, state: {}, proposal: {}/{}/{}",
+        "checking if vote should be signed, state: {}, vote: {}/{}/{}",
         state, vote.height, vote.round, vote.step as u8
     );
     let vote_step = vote.step;

@@ -179,7 +179,7 @@ impl std::fmt::Display for ConsensusData {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "ConsensusData {{ height: {}, round: {}, step: {} }}",
+            "ConsensusData {}/{}/{}",
             self.height, self.round, self.step
         )
     }

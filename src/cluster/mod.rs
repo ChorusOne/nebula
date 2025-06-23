@@ -68,17 +68,17 @@ impl SignerRaftNode {
                         "[init] loaded bootstrap state from state.json: {}",
                         bootstrap_state
                     );
-                    storage.get_signer_state(&bootstrap_state).unwrap();
+                    storage.write_signer_state(&bootstrap_state).unwrap();
                     bootstrap_state
                 } else {
                     info!("[init] no state.json found, using default state.");
                     let default_state = ConsensusData::default();
-                    storage.get_signer_state(&default_state).unwrap();
+                    storage.write_signer_state(&default_state).unwrap();
                     default_state
                 }
             } else {
                 info!("[init] found existing state, loading from DB");
-                storage.set_signer_state().unwrap()
+                storage.read_signer_state().unwrap()
             };
 
         let raft_cfg = RaftCoreConfig {
@@ -414,9 +414,9 @@ fn handle_committed_entries(
             EntryType::EntryNormal => {
                 if !ent.get_data().is_empty() {
                     if let Some(ns) = ConsensusData::from_bytes(ent.get_data()) {
-                        info!("[on_ready] applying normal entry: {:?}", ns);
+                        info!("[on_ready] applying normal entry: {}", ns);
                         *signer_state.write().unwrap() = ns;
-                        raft_group.mut_store().get_signer_state(&ns).unwrap();
+                        raft_group.mut_store().write_signer_state(&ns).unwrap();
 
                         if let Some(callback) = proposal_callbacks.pop_front() {
                             if let Err(e) = callback.send(Ok(())) {

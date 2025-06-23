@@ -27,7 +27,7 @@ impl RaftStorage {
         RaftStorage { db }
     }
 
-    pub fn set_signer_state(&self) -> raft::Result<ConsensusData> {
+    pub fn read_signer_state(&self) -> raft::Result<ConsensusData> {
         match self
             .db
             .get(KEY_SIGNER_STATE)
@@ -38,7 +38,7 @@ impl RaftStorage {
         }
     }
 
-    pub fn get_signer_state(&self, sm: &ConsensusData) -> raft::Result<()> {
+    pub fn write_signer_state(&self, sm: &ConsensusData) -> raft::Result<()> {
         let value = sm.to_bytes();
         self.db
             .put(KEY_SIGNER_STATE, &value)
@@ -91,7 +91,7 @@ impl RaftStorage {
         let index = meta.get_index();
 
         if let Some(sm_data) = ConsensusData::from_bytes(snapshot.get_data()) {
-            self.get_signer_state(&sm_data)?;
+            self.write_signer_state(&sm_data)?;
         }
 
         self.set_conf_state(meta.get_conf_state().clone())?;
@@ -221,7 +221,7 @@ impl Storage for RaftStorage {
             .mut_metadata()
             .set_term(state.hard_state.get_term());
 
-        let sm_data = self.set_signer_state()?;
+        let sm_data = self.read_signer_state()?;
         snapshot.set_data(sm_data.to_bytes().into());
 
         Ok(snapshot)
