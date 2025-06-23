@@ -82,7 +82,7 @@ fn create_signer_with_mock_conn() -> (
 
 pub fn setup() {
     let _ = env_logger::Builder::new()
-        .filter_level(log::LevelFilter::Warn)
+        .filter_level(log::LevelFilter::Trace)
         .try_init();
 }
 

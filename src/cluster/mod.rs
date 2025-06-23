@@ -40,7 +40,7 @@ impl SignerRaftNode {
             .overflow_strategy(slog_async::OverflowStrategy::Block)
             .build()
             .fuse();
-        let logger = slog::Logger::root(drain, o!("tag" => format!("[{}]", config.node_id)));
+        let logger = slog::Logger::root(drain, o!());
 
         let path = format!("{}_{}", config.data_path, config.node_id);
         info!("[init] storage at {}", path);
@@ -241,7 +241,11 @@ impl SignerRaftNode {
     }
 
     pub fn replicate_state(&self, new_state: ConsensusData) -> Result<(), SignerError> {
-        info!("[api] replicating state: {:?}", new_state);
+        info!(
+            "[api] replicating state: {}, leader_id: {}",
+            new_state,
+            self.leader_id().unwrap(),
+        );
         if !self.is_leader() {
             return Err(SignerError::Other(
                 "This node is not the leader".to_string(),
@@ -414,13 +418,18 @@ fn handle_committed_entries(
             EntryType::EntryNormal => {
                 if !ent.get_data().is_empty() {
                     if let Some(ns) = ConsensusData::from_bytes(ent.get_data()) {
-                        info!("[on_ready] applying normal entry: {}", ns);
+                        info!(
+                            "[on_ready] applying normal entry: {}, current state: {}, node_id: {}",
+                            ns,
+                            signer_state.read().unwrap(),
+                            raft_group.raft.id,
+                        );
                         *signer_state.write().unwrap() = ns;
                         raft_group.mut_store().write_signer_state(&ns).unwrap();
 
                         if let Some(callback) = proposal_callbacks.pop_front() {
                             if let Err(e) = callback.send(Ok(())) {
-                                warn!("[on_ready] failed to send commit confirmation: {:?}", e);
+                                warn!("failed to send commit confirmation: {:?}", e);
                             }
                         }
                     }
