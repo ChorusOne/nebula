@@ -52,212 +52,29 @@ impl SignerRaftNode {
     }
 
     pub fn new(config: RaftConfig) -> Arc<Self> {
-        let drain = slog_stdlog::StdLog.fuse();
-        let drain = slog_async::Async::new(drain)
-            .chan_size(4096)
-            .overflow_strategy(slog_async::OverflowStrategy::Block)
-            .build()
-            .fuse();
-        let logger = slog::Logger::root(drain, o!());
-
-        let path = format!("{}_{}", config.data_path, config.node_id);
-        info!("storage path: {}", path);
-        let mut storage = RaftStorage::new(&path);
-
-        let peer_ids: Vec<u64> = config.peers.iter().map(|p| p.id).collect();
-        let init_state = storage.initial_state().unwrap();
-        let initial_sm_state =
-            if init_state.hard_state.commit == 0 && init_state.hard_state.term == 0 {
-                info!("fresh store, bootstrapping with peers: {:?}", peer_ids);
-                let mut snap = Snapshot::default();
-                snap.mut_metadata().set_index(1);
-                snap.mut_metadata().set_term(1);
-                let mut cs = ConfState::default();
-                cs.set_voters(peer_ids);
-                snap.mut_metadata().set_conf_state(cs);
-                storage.apply_snapshot(snap).unwrap();
-
-                let state_file_path = std::path::Path::new(&config.initial_state_path);
-                if let Some(bootstrap_state) = ConsensusData::load_from_file(state_file_path) {
-                    info!(
-                        "loaded bootstrap state from state.json: {}",
-                        bootstrap_state
-                    );
-                    storage.write_signer_state(&bootstrap_state).unwrap();
-                    bootstrap_state
-                } else {
-                    info!("no state.json found, using default state.");
-                    let default_state = ConsensusData::default();
-                    storage.write_signer_state(&default_state).unwrap();
-                    default_state
-                }
-            } else {
-                info!("found existing state, loading from DB");
-                storage.read_signer_state().unwrap()
-            };
-
-        let raft_cfg = RaftCoreConfig {
-            id: config.node_id,
-            election_tick: 10,
-            check_quorum: true,
-            heartbeat_tick: 3,
-            ..Default::default()
-        };
-        raft_cfg.validate().unwrap();
+        let logger = stdlog_to_slog();
+        let storage = create_storage(&config);
+        let signer_state = Arc::new(RwLock::new(storage.read_signer_state().unwrap()));
 
         let (in_tx, in_rx) = mpsc::channel::<RaftMessage>();
         let (out_tx, out_rx) = mpsc::channel::<RaftProtoMessage>();
         let raft_state = Arc::new(RwLock::new((StateRole::Follower, 0)));
 
-        {
-            let bind = config.bind_addr.clone();
-            let in_tx_clone = in_tx.clone();
-            thread::spawn(move || {
-                let listener =
-                    TcpListener::bind(&bind).unwrap_or_else(|_| panic!("bind failed on {}", bind));
-                info!("listening on {}", bind);
-                for conn in listener.incoming() {
-                    if let Ok(stream) = conn {
-                        let in_tx = in_tx_clone.clone();
-                        thread::spawn(move || {
-                            let mut reader = BufReader::new(stream);
-                            loop {
-                                let len = match reader.read_u32::<BigEndian>() {
-                                    Ok(l) => l as usize,
-                                    Err(_) => break,
-                                };
-                                let mut buf = vec![0; len];
-                                if reader.read_exact(&mut buf).is_err() {
-                                    break;
-                                }
-                                match RaftProtoMessage::parse_from_bytes(&buf) {
-                                    Ok(msg) => {
-                                        if in_tx.send(RaftMessage::Msg(msg)).is_err() {
-                                            break;
-                                        }
-                                    }
-                                    Err(e) => warn!("parse error: {:?}", e),
-                                }
-                            }
-                        });
-                    }
-                }
-            });
-        }
+        start_inbound_handler(config.bind_addr.clone(), in_tx.clone());
+        start_outbound_handler(out_rx, config.peers.clone(), config.node_id);
 
-        {
-            let peers_config = config.peers.clone();
-            let me = config.node_id;
-
-            thread::spawn(move || {
-                let mut peer_writers: HashMap<u64, (String, Option<BufWriter<TcpStream>>)> =
-                    peers_config
-                        .into_iter()
-                        .filter(|p| p.id != me)
-                        .map(|p| (p.id, (p.addr, None)))
-                        .collect();
-
-                while let Ok(msg) = out_rx.recv() {
-                    let to_id = msg.to;
-
-                    let (addr, writer_opt) = match peer_writers.get_mut(&to_id) {
-                        Some(info) => info,
-                        None => {
-                            warn!("trying to send message to unknown peer {}", to_id,);
-                            continue;
-                        }
-                    };
-
-                    if writer_opt.is_none() {
-                        match TcpStream::connect(&*addr) {
-                            Ok(stream) => {
-                                info!("connected to {} ({})", addr, to_id);
-                                *writer_opt = Some(BufWriter::new(stream));
-                            }
-                            Err(_) => {
-                                warn!(
-                                    "failed to connect to {} ({}); will retry on next message",
-                                    addr, to_id
-                                );
-                                continue;
-                            }
-                        }
-                    }
-
-                    if let Some(w) = writer_opt {
-                        let bytes = msg.write_to_bytes().unwrap();
-                        if w.write_u32::<BigEndian>(bytes.len() as u32).is_err()
-                            || w.write_all(&bytes).is_err()
-                            || w.flush().is_err()
-                        {
-                            warn!(
-                                "failed to send message to {}; connection broken. will reconnect.",
-                                to_id
-                            );
-                            *writer_opt = None;
-                        }
-                    }
-                }
-            });
-        }
-
-        let mut raft_node = RawNode::new(&raft_cfg, storage, &logger).unwrap();
-
-        let signer_state = Arc::new(RwLock::new(initial_sm_state));
-        let sm_clone = Arc::clone(&signer_state);
-        let state_clone = Arc::clone(&raft_state);
-
-        let handle = thread::spawn(move || {
-            let mut last_tick = Instant::now();
-            let mut timeout = Duration::from_millis(100);
-
-            let mut proposal_callbacks: VecDeque<Sender<Result<(), SignerError>>> = VecDeque::new();
-
-            loop {
-                match in_rx.recv_timeout(timeout) {
-                    Ok(RaftMessage::Propose(data, callback)) => {
-                        let _ = raft_node.propose(vec![], data.to_bytes());
-                        proposal_callbacks.push_back(callback);
-                    }
-                    Ok(RaftMessage::Msg(m)) => {
-                        let _ = raft_node.step(m);
-                    }
-                    Ok(RaftMessage::TransferLeadership(transferee_id)) => {
-                        raft_node.transfer_leader(transferee_id);
-                    }
-                    Ok(RaftMessage::Shutdown) => {
-                        info!("Raft thread received shutdown signal");
-                        for callback in proposal_callbacks.drain(..) {
-                            let _ = callback
-                                .send(Err(SignerError::Other("Node shutting down".to_string())));
-                        }
-                        break;
-                    }
-                    Err(RecvTimeoutError::Timeout) => {}
-                    Err(RecvTimeoutError::Disconnected) => break,
-                }
-
-                let elapsed = last_tick.elapsed();
-                if elapsed >= timeout {
-                    raft_node.tick();
-                    last_tick = Instant::now();
-                    timeout = Duration::from_millis(100);
-                } else {
-                    timeout -= elapsed;
-                }
-
-                on_ready(
-                    &mut raft_node,
-                    &sm_clone,
-                    &out_tx,
-                    &state_clone,
-                    &mut proposal_callbacks,
-                );
-            }
-        });
+        let handle = start_raft_thread(
+            config.node_id,
+            storage,
+            logger,
+            in_rx,
+            out_tx,
+            Arc::clone(&signer_state),
+            Arc::clone(&raft_state),
+        );
 
         Arc::new(SignerRaftNode {
-            signer_state: signer_state,
+            signer_state,
             proposal_sender: in_tx,
             raft_state,
             node_id: config.node_id,
@@ -334,6 +151,220 @@ impl SignerRaftNode {
                 ))
             })
     }
+}
+
+fn stdlog_to_slog() -> slog::Logger {
+    let drain = slog_stdlog::StdLog.fuse();
+    let drain = slog_async::Async::new(drain)
+        .chan_size(4096)
+        .overflow_strategy(slog_async::OverflowStrategy::Block)
+        .build()
+        .fuse();
+    slog::Logger::root(drain, o!())
+}
+
+fn create_storage(config: &RaftConfig) -> RaftStorage {
+    let path = format!("{}_{}", config.data_path, config.node_id);
+    info!("storage path: {}", path);
+    let mut storage = RaftStorage::new(&path);
+
+    let peer_ids: Vec<u64> = config.peers.iter().map(|p| p.id).collect();
+    let init_state = storage.initial_state().unwrap();
+
+    if init_state.hard_state.commit == 0 && init_state.hard_state.term == 0 {
+        info!("fresh store, bootstrapping with peers: {:?}", peer_ids);
+        bootstrap_storage(&mut storage, peer_ids, &config.initial_state_path);
+    } else {
+        info!("found existing state, loading from DB");
+    }
+
+    storage
+}
+
+fn bootstrap_storage(storage: &mut RaftStorage, peer_ids: Vec<u64>, initial_state_path: &str) {
+    let mut snap = Snapshot::default();
+    snap.mut_metadata().set_index(1);
+    snap.mut_metadata().set_term(1);
+    let mut cs = ConfState::default();
+    cs.set_voters(peer_ids);
+    snap.mut_metadata().set_conf_state(cs);
+    storage.apply_snapshot(snap).unwrap();
+
+    let state_file_path = std::path::Path::new(initial_state_path);
+    let initial_state =
+        if let Some(bootstrap_state) = ConsensusData::load_from_file(state_file_path) {
+            info!(
+                "loaded bootstrap state from state.json: {}",
+                bootstrap_state
+            );
+            bootstrap_state
+        } else {
+            info!(
+                "no state file found at {}, using default state.",
+                initial_state_path
+            );
+            ConsensusData::default()
+        };
+
+    storage.write_signer_state(&initial_state).unwrap();
+}
+
+fn start_inbound_handler(bind_addr: String, in_tx: Sender<RaftMessage>) {
+    thread::spawn(move || {
+        let listener = TcpListener::bind(&bind_addr)
+            .unwrap_or_else(|_| panic!("bind failed on {}", bind_addr));
+        info!("listening on {}", bind_addr);
+        for conn in listener.incoming() {
+            if let Ok(stream) = conn {
+                let in_tx = in_tx.clone();
+                thread::spawn(move || {
+                    let mut reader = BufReader::new(stream);
+                    loop {
+                        let len = match reader.read_u32::<BigEndian>() {
+                            Ok(l) => l as usize,
+                            Err(_) => break,
+                        };
+                        let mut buf = vec![0; len];
+                        if reader.read_exact(&mut buf).is_err() {
+                            break;
+                        }
+                        match RaftProtoMessage::parse_from_bytes(&buf) {
+                            Ok(msg) => {
+                                if in_tx.send(RaftMessage::Msg(msg)).is_err() {
+                                    break;
+                                }
+                            }
+                            Err(e) => warn!("parse error: {:?}", e),
+                        }
+                    }
+                });
+            }
+        }
+    });
+}
+
+fn start_outbound_handler(
+    out_rx: mpsc::Receiver<RaftProtoMessage>,
+    peers: Vec<crate::config::PeerConfig>,
+    node_id: u64,
+) {
+    thread::spawn(move || {
+        let mut peer_writers: HashMap<u64, (String, Option<BufWriter<TcpStream>>)> = peers
+            .into_iter()
+            .filter(|p| p.id != node_id)
+            .map(|p| (p.id, (p.addr, None)))
+            .collect();
+
+        while let Ok(msg) = out_rx.recv() {
+            let to_id = msg.to;
+
+            let (addr, writer_opt) = match peer_writers.get_mut(&to_id) {
+                Some(info) => info,
+                None => {
+                    warn!("trying to send message to unknown peer {}", to_id,);
+                    continue;
+                }
+            };
+
+            if writer_opt.is_none() {
+                match TcpStream::connect(&*addr) {
+                    Ok(stream) => {
+                        info!("connected to {} ({})", addr, to_id);
+                        *writer_opt = Some(BufWriter::new(stream));
+                    }
+                    Err(_) => {
+                        warn!(
+                            "failed to connect to {} ({}); will retry on next message",
+                            addr, to_id
+                        );
+                        continue;
+                    }
+                }
+            }
+
+            if let Some(w) = writer_opt {
+                let bytes = msg.write_to_bytes().unwrap();
+                if w.write_u32::<BigEndian>(bytes.len() as u32).is_err()
+                    || w.write_all(&bytes).is_err()
+                    || w.flush().is_err()
+                {
+                    warn!(
+                        "failed to send message to {}; connection broken. will reconnect.",
+                        to_id
+                    );
+                    *writer_opt = None;
+                }
+            }
+        }
+    });
+}
+
+fn start_raft_thread(
+    node_id: u64,
+    storage: RaftStorage,
+    logger: slog::Logger,
+    in_rx: mpsc::Receiver<RaftMessage>,
+    out_tx: Sender<RaftProtoMessage>,
+    signer_state: Arc<RwLock<ConsensusData>>,
+    raft_state: Arc<RwLock<(StateRole, u64)>>,
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        let raft_cfg = RaftCoreConfig {
+            id: node_id,
+            election_tick: 10,
+            check_quorum: true,
+            heartbeat_tick: 3,
+            ..Default::default()
+        };
+        raft_cfg.validate().unwrap();
+
+        let mut raft_node = RawNode::new(&raft_cfg, storage, &logger).unwrap();
+        let mut last_tick = Instant::now();
+        let mut timeout = Duration::from_millis(100);
+        let mut proposal_callbacks: VecDeque<Sender<Result<(), SignerError>>> = VecDeque::new();
+
+        loop {
+            match in_rx.recv_timeout(timeout) {
+                Ok(RaftMessage::Propose(data, callback)) => {
+                    let _ = raft_node.propose(vec![], data.to_bytes());
+                    proposal_callbacks.push_back(callback);
+                }
+                Ok(RaftMessage::Msg(m)) => {
+                    let _ = raft_node.step(m);
+                }
+                Ok(RaftMessage::TransferLeadership(transferee_id)) => {
+                    raft_node.transfer_leader(transferee_id);
+                }
+                Ok(RaftMessage::Shutdown) => {
+                    info!("Raft thread received shutdown signal");
+                    for callback in proposal_callbacks.drain(..) {
+                        let _ = callback
+                            .send(Err(SignerError::Other("Node shutting down".to_string())));
+                    }
+                    break;
+                }
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => break,
+            }
+
+            let elapsed = last_tick.elapsed();
+            if elapsed >= timeout {
+                raft_node.tick();
+                last_tick = Instant::now();
+                timeout = Duration::from_millis(100);
+            } else {
+                timeout -= elapsed;
+            }
+
+            on_ready(
+                &mut raft_node,
+                &signer_state,
+                &out_tx,
+                &raft_state,
+                &mut proposal_callbacks,
+            );
+        }
+    })
 }
 
 fn on_ready(

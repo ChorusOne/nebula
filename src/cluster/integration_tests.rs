@@ -705,3 +705,65 @@ fn no_replicate_acks() {
         _ => panic!("Expected SignedProposalResponse"),
     }
 }
+
+#[test]
+fn new_leader_signing() {
+    let mut harness = TestHarness::new(3);
+
+    let initial_leader = harness.wait_for_leader(Duration::from_secs(10)).unwrap();
+
+    let (mut signer1, handle1) = create_signer_with_mock_conn();
+
+    let req_bytes = create_proposal_request_bytes(100, 0);
+    handle1.request_sender.send(req_bytes).unwrap();
+
+    harness.shutdown_node(initial_leader.node_id()).unwrap();
+
+    thread::sleep(Duration::from_millis(500));
+
+    let new_leader = harness.wait_for_leader(Duration::from_secs(1)).unwrap();
+
+    harness.handle_request(&mut signer1, &new_leader).unwrap();
+
+    let response_bytes = handle1.response_receiver.recv().unwrap();
+    let response_msg =
+        v0_38::privval::Message::decode_length_delimited(response_bytes.as_slice()).unwrap();
+
+    match response_msg.sum {
+        Some(v0_38::privval::message::Sum::SignedProposalResponse(res)) => {
+            assert!(res.error.is_none(), "2-node cluster should still work");
+        }
+        _ => panic!("Expected SignedProposalResponse"),
+    }
+}
+
+#[test]
+fn some_turbulence() {
+    let mut harness = TestHarness::new(3);
+
+    let initial_leader = harness.wait_for_leader(Duration::from_secs(10)).unwrap();
+
+    let (mut signer1, handle1) = create_signer_with_mock_conn();
+
+    let req_bytes = create_proposal_request_bytes(100, 0);
+    handle1.request_sender.send(req_bytes).unwrap();
+
+    harness.shutdown_node(initial_leader.node_id()).unwrap(); // kill the leader
+
+    thread::sleep(Duration::from_millis(500));
+
+    let new_leader = harness.wait_for_leader(Duration::from_secs(1)).unwrap();
+
+    harness.handle_request(&mut signer1, &new_leader).unwrap();
+
+    let response_bytes = handle1.response_receiver.recv().unwrap();
+    let response_msg =
+        v0_38::privval::Message::decode_length_delimited(response_bytes.as_slice()).unwrap();
+
+    match response_msg.sum {
+        Some(v0_38::privval::message::Sum::SignedProposalResponse(res)) => {
+            assert!(res.error.is_none(), "2-node cluster should still work");
+        }
+        _ => panic!("Expected SignedProposalResponse"),
+    }
+}
