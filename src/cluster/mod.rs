@@ -23,6 +23,7 @@ enum RaftMessage {
     Propose(ConsensusData, Sender<Result<(), SignerError>>),
     Msg(RaftProtoMessage),
     TransferLeadership(u64),
+    Shutdown,
 }
 
 pub struct SignerRaftNode {
@@ -30,9 +31,26 @@ pub struct SignerRaftNode {
     pub signer_state: Arc<RwLock<ConsensusData>>,
     proposal_sender: Sender<RaftMessage>,
     raft_state: Arc<RwLock<(StateRole, u64)>>,
+    shutdown_handle: Arc<RwLock<Option<thread::JoinHandle<()>>>>,
 }
 
 impl SignerRaftNode {
+    pub fn shutdown(&self) -> Result<(), SignerError> {
+        info!("Shutting down node {}", self.node_id);
+
+        self.proposal_sender
+            .send(RaftMessage::Shutdown)
+            .map_err(|e| SignerError::Other(format!("Failed to send shutdown: {}", e)))?;
+
+        if let Some(handle) = self.shutdown_handle.write().unwrap().take() {
+            handle
+                .join()
+                .map_err(|_| SignerError::Other("Failed to join raft thread".to_string()))?;
+        }
+
+        Ok(())
+    }
+
     pub fn new(config: RaftConfig) -> Arc<Self> {
         let drain = slog_stdlog::StdLog.fuse();
         let drain = slog_async::Async::new(drain)
@@ -43,17 +61,14 @@ impl SignerRaftNode {
         let logger = slog::Logger::root(drain, o!());
 
         let path = format!("{}_{}", config.data_path, config.node_id);
-        info!("[init] storage at {}", path);
+        info!("storage path: {}", path);
         let mut storage = RaftStorage::new(&path);
 
         let peer_ids: Vec<u64> = config.peers.iter().map(|p| p.id).collect();
         let init_state = storage.initial_state().unwrap();
         let initial_sm_state =
             if init_state.hard_state.commit == 0 && init_state.hard_state.term == 0 {
-                info!(
-                    "[init] fresh store, bootstrapping with peers: {:?}",
-                    peer_ids
-                );
+                info!("fresh store, bootstrapping with peers: {:?}", peer_ids);
                 let mut snap = Snapshot::default();
                 snap.mut_metadata().set_index(1);
                 snap.mut_metadata().set_term(1);
@@ -65,25 +80,26 @@ impl SignerRaftNode {
                 let state_file_path = std::path::Path::new(&config.initial_state_path);
                 if let Some(bootstrap_state) = ConsensusData::load_from_file(state_file_path) {
                     info!(
-                        "[init] loaded bootstrap state from state.json: {}",
+                        "loaded bootstrap state from state.json: {}",
                         bootstrap_state
                     );
                     storage.write_signer_state(&bootstrap_state).unwrap();
                     bootstrap_state
                 } else {
-                    info!("[init] no state.json found, using default state.");
+                    info!("no state.json found, using default state.");
                     let default_state = ConsensusData::default();
                     storage.write_signer_state(&default_state).unwrap();
                     default_state
                 }
             } else {
-                info!("[init] found existing state, loading from DB");
+                info!("found existing state, loading from DB");
                 storage.read_signer_state().unwrap()
             };
 
         let raft_cfg = RaftCoreConfig {
             id: config.node_id,
             election_tick: 10,
+            check_quorum: true,
             heartbeat_tick: 3,
             ..Default::default()
         };
@@ -99,7 +115,7 @@ impl SignerRaftNode {
             thread::spawn(move || {
                 let listener =
                     TcpListener::bind(&bind).unwrap_or_else(|_| panic!("bind failed on {}", bind));
-                info!("[net] listening on {}", bind);
+                info!("listening on {}", bind);
                 for conn in listener.incoming() {
                     if let Ok(stream) = conn {
                         let in_tx = in_tx_clone.clone();
@@ -120,7 +136,7 @@ impl SignerRaftNode {
                                             break;
                                         }
                                     }
-                                    Err(e) => warn!("[net] parse error: {:?}", e),
+                                    Err(e) => warn!("parse error: {:?}", e),
                                 }
                             }
                         });
@@ -147,7 +163,7 @@ impl SignerRaftNode {
                     let (addr, writer_opt) = match peer_writers.get_mut(&to_id) {
                         Some(info) => info,
                         None => {
-                            warn!("[net] trying to send message to unknown peer {}", to_id);
+                            warn!("trying to send message to unknown peer {}", to_id,);
                             continue;
                         }
                     };
@@ -155,12 +171,12 @@ impl SignerRaftNode {
                     if writer_opt.is_none() {
                         match TcpStream::connect(&*addr) {
                             Ok(stream) => {
-                                info!("[net] connected to {} ({})", addr, to_id);
+                                info!("connected to {} ({})", addr, to_id);
                                 *writer_opt = Some(BufWriter::new(stream));
                             }
                             Err(_) => {
                                 warn!(
-                                    "[net] failed to connect to {} ({}); will retry on next message",
+                                    "failed to connect to {} ({}); will retry on next message",
                                     addr, to_id
                                 );
                                 continue;
@@ -175,7 +191,7 @@ impl SignerRaftNode {
                             || w.flush().is_err()
                         {
                             warn!(
-                                "[net] failed to send message to {}; connection broken. will reconnect.",
+                                "failed to send message to {}; connection broken. will reconnect.",
                                 to_id
                             );
                             *writer_opt = None;
@@ -191,7 +207,7 @@ impl SignerRaftNode {
         let sm_clone = Arc::clone(&signer_state);
         let state_clone = Arc::clone(&raft_state);
 
-        thread::spawn(move || {
+        let handle = thread::spawn(move || {
             let mut last_tick = Instant::now();
             let mut timeout = Duration::from_millis(100);
 
@@ -208,6 +224,14 @@ impl SignerRaftNode {
                     }
                     Ok(RaftMessage::TransferLeadership(transferee_id)) => {
                         raft_node.transfer_leader(transferee_id);
+                    }
+                    Ok(RaftMessage::Shutdown) => {
+                        info!("Raft thread received shutdown signal");
+                        for callback in proposal_callbacks.drain(..) {
+                            let _ = callback
+                                .send(Err(SignerError::Other("Node shutting down".to_string())));
+                        }
+                        break;
                     }
                     Err(RecvTimeoutError::Timeout) => {}
                     Err(RecvTimeoutError::Disconnected) => break,
@@ -237,12 +261,13 @@ impl SignerRaftNode {
             proposal_sender: in_tx,
             raft_state,
             node_id: config.node_id,
+            shutdown_handle: Arc::new(RwLock::new(Some(handle))),
         })
     }
 
     pub fn replicate_state(&self, new_state: ConsensusData) -> Result<(), SignerError> {
         info!(
-            "[api] replicating state: {}, leader_id: {}",
+            "replicating state: {}, leader_id: {}",
             new_state,
             self.leader_id().unwrap(),
         );
@@ -261,18 +286,15 @@ impl SignerRaftNode {
 
         match rx.recv_timeout(Duration::from_secs(5)) {
             Ok(Ok(())) => {
-                info!(
-                    "[api] replication successful, propagated state: {}",
-                    new_state
-                );
+                info!("replication successful, propagated state: {}", new_state);
                 Ok(())
             }
             Ok(Err(e)) => {
-                warn!("[api] replication failed: {:?}", e);
+                warn!("replication failed: {:?}", e);
                 Err(e)
             }
             Err(_) => {
-                warn!("[api] replication timed out");
+                warn!("replication timed out");
                 Err(SignerError::Other(
                     "State replication timed out".to_string(),
                 ))
@@ -296,7 +318,7 @@ impl SignerRaftNode {
 
     #[allow(dead_code)] // TODO
     pub fn transfer_leadership(&self, transferee_id: u64) -> Result<(), SignerError> {
-        info!("[api] transferring leadership to node {}", transferee_id);
+        info!("transferring leadership to node {}", transferee_id);
         if !self.is_leader() {
             return Err(SignerError::Other(
                 "This node is not the leader, cannot transfer leadership".to_string(),
@@ -333,7 +355,7 @@ fn on_ready(
 
         if was_leader && !is_leader {
             warn!(
-                "[on_ready] leadership lost, failing {} pending proposals",
+                "leadership lost, failing {} pending proposals",
                 proposal_callbacks.len()
             );
             for callback in proposal_callbacks.drain(..) {
@@ -357,10 +379,7 @@ fn on_ready(
         raft_group.mut_store().apply_snapshot(snap.clone()).unwrap();
 
         if let Some(sm_data) = ConsensusData::from_bytes(snap.get_data()) {
-            info!(
-                "[on_ready] loaded state machine from snapshot: {:?}",
-                sm_data
-            );
+            info!("loaded state machine from snapshot: {:?}", sm_data);
             *signer_state.write().unwrap() = sm_data;
         }
     }
@@ -419,7 +438,7 @@ fn handle_committed_entries(
                 if !ent.get_data().is_empty() {
                     if let Some(ns) = ConsensusData::from_bytes(ent.get_data()) {
                         info!(
-                            "[on_ready] applying normal entry: {}, current state: {}, node_id: {}",
+                            "applying normal entry received from master: {}, current node state: {}, node_id: {}",
                             ns,
                             signer_state.read().unwrap(),
                             raft_group.raft.id,
@@ -436,7 +455,7 @@ fn handle_committed_entries(
                 }
             }
             EntryType::EntryConfChange => {
-                info!("[on_ready] applying conf change entry");
+                info!("applying conf change entry");
                 let cc: raft::prelude::ConfChange =
                     protobuf::Message::parse_from_bytes(ent.get_data()).unwrap();
                 let cs = raft_group.apply_conf_change(&cc).unwrap();

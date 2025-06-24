@@ -59,6 +59,33 @@ impl TestHarness {
             .collect()
     }
 
+    pub fn shutdown_node(&mut self, node_id: u64) -> Result<(), SignerError> {
+        if let Some(node) = self.nodes.iter().find(|n| n.node_id == node_id) {
+            node.shutdown()?;
+        }
+        self.nodes.retain(|n| n.node_id != node_id);
+        Ok(())
+    }
+
+    pub fn shutdown_followers(&mut self) -> Result<(), SignerError> {
+        let leader_id = self
+            .wait_for_leader(Duration::from_secs(5))
+            .ok_or_else(|| SignerError::Other("No leader found".to_string()))?
+            .node_id;
+
+        let follower_ids: Vec<u64> = self
+            .nodes
+            .iter()
+            .filter(|n| n.node_id != leader_id)
+            .map(|n| n.node_id)
+            .collect();
+
+        for id in follower_ids {
+            self.shutdown_node(id)?;
+        }
+        Ok(())
+    }
+
     fn handle_request(
         &self,
         signer: &mut Signer<Box<dyn SigningBackend>, VersionV0_38, MockCometBFTConnection>,
@@ -642,5 +669,39 @@ fn double_sign_prevention_after_leadership_change() {
             assert!(res.error.is_none(), "New block signing should succeed");
         }
         _ => panic!("Expected successful SignedProposalResponse"),
+    }
+}
+
+#[test]
+fn no_replicate_acks() {
+    let mut harness = TestHarness::new(3);
+
+    let initial_leader = harness.wait_for_leader(Duration::from_secs(10)).unwrap();
+
+    let (mut signer1, handle1) = create_signer_with_mock_conn();
+
+    let req_bytes = create_proposal_request_bytes(100, 0);
+    handle1.request_sender.send(req_bytes).unwrap();
+
+    harness.shutdown_followers().unwrap();
+
+    thread::sleep(Duration::from_millis(500));
+
+    harness
+        .handle_request(&mut signer1, &initial_leader)
+        .unwrap();
+
+    let response_bytes = handle1.response_receiver.recv().unwrap();
+    let response_msg =
+        v0_38::privval::Message::decode_length_delimited(response_bytes.as_slice()).unwrap();
+
+    match response_msg.sum {
+        Some(v0_38::privval::message::Sum::SignedProposalResponse(res)) => {
+            assert!(
+                res.error.is_some(),
+                "Replication should fail without followers"
+            );
+        }
+        _ => panic!("Expected SignedProposalResponse"),
     }
 }
