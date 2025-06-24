@@ -1,4 +1,5 @@
-pub mod vault;
+pub mod vault_signer_plugin;
+pub mod vault_transit;
 
 use crate::error::SignerError;
 use base64::{Engine as _, engine::general_purpose};
@@ -157,7 +158,7 @@ impl SigningBackend for Bls12381Signer {
         let compressed = pk.to_bytes();
         Ok(PublicKey {
             bytes: compressed.to_vec(),
-            key_type: KeyType::Bls12_381,
+            key_type: KeyType::Bls12381,
         })
     }
 }

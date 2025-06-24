@@ -8,9 +8,10 @@ use serde_json::Value;
 use std::time::Duration;
 
 use crate::backend::{PublicKey, SigningBackend};
-use crate::config::VaultConfig;
+use crate::config::VaultSignerConfig;
 
-pub struct VaultSigner {
+// This is supposed to use the transit module in Vault, which currently supports only the ed25519 curve.
+pub struct TransitVaultSigner {
     client: Client,
     base_url: String,
     transit_path: String,
@@ -19,21 +20,15 @@ pub struct VaultSigner {
     pub_key: PublicKey,
 }
 
-impl VaultSigner {
-    pub fn new(cfg: VaultConfig) -> Result<Self, SignerError> {
-        info!("starting vault signer");
+impl TransitVaultSigner {
+    pub fn new(cfg: VaultSignerConfig) -> Result<Self, SignerError> {
+        info!("starting transit vault signer");
         let base_url = cfg.address.trim_end_matches('/').to_string();
 
-        let client = if cfg.skip_verify {
-            ClientBuilder::new()
-                .danger_accept_invalid_certs(true)
-                .timeout(Duration::from_secs(10))
-                .build()?
-        } else {
-            ClientBuilder::new()
-                .timeout(Duration::from_secs(10))
-                .build()?
-        };
+        let client = ClientBuilder::new()
+            .danger_accept_invalid_certs(cfg.skip_verify)
+            .timeout(Duration::from_secs(10))
+            .build()?;
 
         let pub_key = Self::fetch_public_key(
             &client,
@@ -43,7 +38,7 @@ impl VaultSigner {
             &cfg.token,
         )?;
 
-        Ok(VaultSigner {
+        Ok(TransitVaultSigner {
             client,
             base_url,
             transit_path: cfg.transit_path,
@@ -148,7 +143,7 @@ impl VaultSigner {
     }
 }
 
-impl SigningBackend for VaultSigner {
+impl SigningBackend for TransitVaultSigner {
     fn sign(&mut self, data: &[u8]) -> Result<Vec<u8>, SignerError> {
         self.sign_data(data)
     }
