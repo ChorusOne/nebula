@@ -216,7 +216,7 @@ impl ProtocolVersion for VersionV0_38 {
                     crate::types::KeyType::Secp256k1 => {
                         v0_38::crypto::public_key::Sum::Secp256k1(pub_key.bytes.into())
                     }
-                    crate::types::KeyType::Bls12_381 => {
+                    crate::types::KeyType::Bls12381 => {
                         v0_38::crypto::public_key::Sum::Bls12381(pub_key.bytes.into())
                     }
                 }),

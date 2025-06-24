@@ -11,8 +11,10 @@ mod signer;
 mod types;
 mod versions;
 
+use crate::backend::vault_signer_plugin::PluginVaultSigner;
 use crate::backend::{
-    Bls12381Signer, Ed25519Signer, Secp256k1Signer, SigningBackend, vault::VaultSigner,
+    Bls12381Signer, Ed25519Signer, Secp256k1Signer, SigningBackend,
+    vault_transit::TransitVaultSigner,
 };
 use crate::config::SigningMode;
 use crate::error::SignerError;
@@ -203,12 +205,16 @@ fn create_backend(config: &Config) -> Result<Box<dyn SigningBackend>, SignerErro
             match native.key_type {
                 KeyType::Ed25519 => Ok(Box::new(Ed25519Signer::from_key_file(path)?)),
                 KeyType::Secp256k1 => Ok(Box::new(Secp256k1Signer::from_key_file(path)?)),
-                KeyType::Bls12_381 => Ok(Box::new(Bls12381Signer::from_key_file(path)?)),
+                KeyType::Bls12381 => Ok(Box::new(Bls12381Signer::from_key_file(path)?)),
             }
         }
-        SigningMode::Vault => {
+        SigningMode::VaultTransit => {
             let vault = config.signing.vault.as_ref().unwrap();
-            Ok(Box::new(VaultSigner::new(vault.clone())?))
+            Ok(Box::new(TransitVaultSigner::new(vault.clone())?))
+        }
+        SigningMode::VaultSignerPlugin => {
+            let cfg = config.signing.vault.as_ref().unwrap();
+            Ok(Box::new(PluginVaultSigner::new(cfg.clone())?))
         }
     }
 }

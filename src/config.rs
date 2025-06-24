@@ -59,7 +59,8 @@ impl Config {
 #[serde(rename_all = "snake_case")]
 #[derive(Default)]
 pub enum SigningMode {
-    Vault,
+    VaultTransit,
+    VaultSignerPlugin,
     #[default]
     Native,
 }
@@ -67,14 +68,15 @@ pub enum SigningMode {
 #[derive(Debug, Deserialize, Serialize, Default, Clone)]
 pub struct SigningConfigs {
     #[serde(default)]
-    pub vault: Option<VaultConfig>,
+    pub vault: Option<VaultSignerConfig>,
 
     #[serde(default)]
     pub native: Option<NativeConfig>,
 }
 
+// Shared config for both vault signer plugin and the transit module
 #[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct VaultConfig {
+pub struct VaultSignerConfig {
     pub address: String,
     pub token: String,
     pub transit_path: String,
