@@ -1,5 +1,8 @@
-chain_id         = "testing"
+# chain_id         = "beacond-2061"
+chain_id         = "story-1001511"
+# chain_id         = "testing"
 version          = "v0_38"
+# version          = "v1_0"
 signing_mode     = "vault_signer_plugin"
 log_level        = "debug"
 
@@ -14,16 +17,20 @@ id = 1
 addr = "127.0.0.1:7001"
 
 [[connections]]
-host              = "192.168.0.5"
-port              = 36558
+host              = "127.0.0.1"
+port              = 26659
 
-[[connections]]
-host              = "192.168.0.5"
-port              = 26558
+# [[connections]]
+# host              = "192.168.0.5"
+# port              = 36558
+
+# [[connections]]
+# host              = "192.168.0.5"
+# port              = 26558
 
 [signing.vault]
 address      = "http://127.0.0.1:8200"
 token        = "root"
 transit_path = "signer"
-key_name     = "test-v4"
+key_name     = "test2"
 skip_verify  = true

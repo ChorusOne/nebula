@@ -22,7 +22,6 @@ impl ProtocolVersion for VersionV1_0 {
         match msg.sum {
             Some(v1::privval::message::Sum::SignVoteRequest(req)) => {
                 let vote = req.vote.ok_or(SignerError::InvalidData)?;
-                info!("parsed vote extension: {:?}", vote.extension);
                 Ok((
                     Request::SignVote(tendermint_vote_to_domain(vote)?),
                     req.chain_id,
@@ -223,7 +222,6 @@ impl ProtocolVersion for VersionV1_0 {
     }
 }
 fn tendermint_vote_to_domain(vote: v1::types::Vote) -> Result<Vote, SignerError> {
-    info!("converting tendermint vote: {:?} to domain type", vote);
     Ok(Vote {
         step: match vote.r#type {
             1 => SignedMsgType::Prevote,

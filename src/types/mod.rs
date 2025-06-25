@@ -152,7 +152,8 @@ impl TryFrom<&str> for KeyType {
         match key_type_str {
             "ed25519" => Ok(KeyType::Ed25519),
             "secp256k1" => Ok(KeyType::Secp256k1),
-            "bls12381" => Ok(KeyType::Bls12381),
+            "bls12_381" => Ok(KeyType::Bls12381),
+            "bls12381" => Ok(KeyType::Bls12381), // TODO
             _ => Err(SignerError::InvalidData),
         }
     }
@@ -163,7 +164,7 @@ impl From<KeyType> for String {
         match key_type {
             KeyType::Ed25519 => "ed25519".to_string(),
             KeyType::Secp256k1 => "secp256k1".to_string(),
-            KeyType::Bls12381 => "bls12381".to_string(),
+            KeyType::Bls12381 => "bls12_381".to_string(),
         }
     }
 }

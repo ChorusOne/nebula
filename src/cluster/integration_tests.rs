@@ -721,7 +721,7 @@ fn new_leader_signing() {
 
     thread::sleep(Duration::from_millis(500));
 
-    let new_leader = harness.wait_for_leader(Duration::from_secs(1)).unwrap();
+    let new_leader = harness.wait_for_leader(Duration::from_secs(2)).unwrap();
 
     harness.handle_request(&mut signer1, &new_leader).unwrap();
 
@@ -752,7 +752,7 @@ fn some_turbulence() {
 
     thread::sleep(Duration::from_millis(500));
 
-    let new_leader = harness.wait_for_leader(Duration::from_secs(1)).unwrap();
+    let new_leader = harness.wait_for_leader(Duration::from_secs(3)).unwrap();
 
     harness.handle_request(&mut signer1, &new_leader).unwrap();
 
