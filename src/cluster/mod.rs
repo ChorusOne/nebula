@@ -216,6 +216,9 @@ fn start_inbound_handler(bind_addr: String, in_tx: Sender<RaftMessage>) {
         info!("listening on {}", bind_addr);
         for conn in listener.incoming() {
             if let Ok(stream) = conn {
+                // stream
+                //     .set_read_timeout(Some(Duration::from_secs(1)))
+                //     .expect("failed to set read timeout on raft stream");
                 let in_tx = in_tx.clone();
                 thread::spawn(move || {
                     let mut reader = BufReader::new(stream);
@@ -269,6 +272,9 @@ fn start_outbound_handler(
             if writer_opt.is_none() {
                 match TcpStream::connect(&*addr) {
                     Ok(stream) => {
+                        // stream
+                        //     .set_write_timeout(Some(Duration::from_secs(1)))
+                        //     .expect("failed to set write timeout on raft stream");
                         info!("connected to {} ({})", addr, to_id);
                         *writer_opt = Some(BufWriter::new(stream));
                     }
@@ -313,6 +319,7 @@ fn start_raft_thread(
             id: node_id,
             election_tick: 10,
             check_quorum: true,
+            pre_vote: true,
             heartbeat_tick: 3,
             ..Default::default()
         };
@@ -355,7 +362,6 @@ fn start_raft_thread(
             } else {
                 timeout -= elapsed;
             }
-
             on_ready(
                 &mut raft_node,
                 &signer_state,
@@ -504,3 +510,6 @@ mod integration_tests;
 
 #[cfg(test)]
 mod tests;
+
+// #[cfg(test)]
+// mod partition_tests;

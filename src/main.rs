@@ -139,7 +139,7 @@ fn handle_connection<V: ProtocolVersion + Send + 'static>(
     let mut retry_count = 0;
     let identity_key = ed25519_consensus::SigningKey::new(rand_core::OsRng);
 
-    let mut signer = create_signer::<V>(&host, port, &identity_key, &config)?;
+    let mut signer = create_signer::<V>(&host, port, &identity_key, &config, &raft_node)?;
 
     loop {
         if !raft_node.is_leader() {
@@ -181,6 +181,7 @@ fn create_signer<V: ProtocolVersion>(
     port: u16,
     identity_key: &ed25519_consensus::SigningKey,
     config: &Config,
+    raft_node: &Arc<SignerRaftNode>,
 ) -> Result<Signer<Box<dyn SigningBackend>, V, SecretConnection<TcpStream>>, SignerError> {
     info!("Connecting to CometBFT at {}:{}", host, port);
 
@@ -189,6 +190,7 @@ fn create_signer<V: ProtocolVersion>(
         port,
         identity_key.clone(),
         tendermint_p2p::secret_connection::Version::V0_34,
+        raft_node,
     )?;
 
     let backend = create_backend(config)?;
@@ -244,7 +246,7 @@ fn reconnect<V: ProtocolVersion>(
         );
         thread::sleep(delay);
 
-        match create_signer::<V>(host, port, identity_key, config) {
+        match create_signer::<V>(host, port, identity_key, config, &raft_node) {
             Ok(signer) => {
                 info!("Successfully reconnected to {}:{}", host, port);
                 *retry_count = 0;
