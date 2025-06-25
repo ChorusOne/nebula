@@ -1,10 +1,11 @@
-# chain_id         = "beacond-2061"
-chain_id         = "story-1001511"
+chain_id         = "beacond-2061"
+# chain_id         = "story-1001511"
 # chain_id         = "testing"
-version          = "v0_38"
-# version          = "v1_0"
+# version          = "v0_38"
+version          = "v1_0"
 signing_mode     = "vault_signer_plugin"
-log_level        = "debug"
+# signing_mode     = "native"
+log_level        = "trace"
 
 [raft]
 node_id      = 1
@@ -32,5 +33,9 @@ port              = 26659
 address      = "http://127.0.0.1:8200"
 token        = "root"
 transit_path = "signer"
-key_name     = "test2"
+key_name     = "test-v5-bera"
 skip_verify  = true
+
+[signing.native]
+private_key_path     = "./keys/berachain"
+key_type  = "bls12381"

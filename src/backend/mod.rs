@@ -147,7 +147,7 @@ impl SigningBackend for Bls12381Signer {
     fn sign(&mut self, data: &[u8]) -> Result<Vec<u8>, SignerError> {
         let signature =
             self.secret_key
-                .sign(data, b"BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_", &[]);
+                .sign(data, b"BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_NUL_", &[]); // TODO: add config param for this
 
         Ok(signature.to_bytes().to_vec())
     }

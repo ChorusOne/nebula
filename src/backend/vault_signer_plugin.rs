@@ -53,7 +53,10 @@ impl PluginVaultSigner {
         key_name: &str,
         token: &str,
     ) -> Result<PublicKey, SignerError> {
-        let url = format!("{}/v1/{}/keys/{}", base_url, mount_path, key_name);
+        let url = format!(
+            "{}/v1/{}/keys/{}?compress=false",
+            base_url, mount_path, key_name
+        );
         info!("fetching vault pubkey from {}", url);
 
         let mut headers = HeaderMap::new();
@@ -82,7 +85,7 @@ impl PluginVaultSigner {
 
         let expected_len = match key_type {
             "ed25519" => 32,
-            "secp256k1" => 65,
+            "secp256k1" => 33,
             "bls12381" => 96,
             _ => {
                 return Err(SignerError::VaultError(format!(

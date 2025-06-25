@@ -19,6 +19,8 @@ impl ProtocolVersion for VersionV1_0 {
     fn parse_request(msg_bytes: Vec<u8>) -> Result<(Request, String), SignerError> {
         let msg = v1::privval::Message::decode_length_delimited(msg_bytes.as_ref())?;
 
+        // TODO: sign vote request in privval v1 has the bool field "sign vote extension"
+        // we should handle it
         match msg.sum {
             Some(v1::privval::message::Sum::SignVoteRequest(req)) => {
                 let vote = req.vote.ok_or(SignerError::InvalidData)?;
@@ -95,7 +97,7 @@ impl ProtocolVersion for VersionV1_0 {
     }
 
     fn vote_to_bytes(vote: &Vote, chain_id: &str) -> Result<Vec<u8>, SignerError> {
-        trace!("changing vote to bytes, block id: {:?}", vote.block_id);
+        trace!("changing vote to bytes, vote: {:?}", vote);
 
         let canonical = v1::types::CanonicalVote {
             r#type: vote.step as i32,
@@ -231,9 +233,13 @@ fn tendermint_vote_to_domain(vote: v1::types::Vote) -> Result<Vote, SignerError>
         },
         height: vote.height,
         round: vote.round as i64,
-        timestamp: vote
-            .timestamp
-            .map(|t| t.seconds * 1_000_000_000 + t.nanos as i64),
+        timestamp: vote.timestamp.and_then(|t| {
+            if t.seconds < 0 {
+                None
+            } else {
+                Some(t.seconds * 1_000_000_000 + t.nanos as i64)
+            }
+        }),
         block_id: vote.block_id.map(|id| BlockId {
             hash: id.hash.to_vec(),
             parts: id.part_set_header.map(|p| PartSetHeader {
@@ -252,9 +258,13 @@ fn tendermint_proposal_to_domain(proposal: v1::types::Proposal) -> Result<Propos
         step: SignedMsgType::Proposal,
         height: proposal.height,
         round: proposal.round as i64,
-        timestamp: proposal
-            .timestamp
-            .map(|t| t.seconds * 1_000_000_000 + t.nanos as i64),
+        timestamp: proposal.timestamp.and_then(|t| {
+            if t.seconds < 0 {
+                None
+            } else {
+                Some(t.seconds * 1_000_000_000 + t.nanos as i64)
+            }
+        }),
         pol_round: proposal.pol_round as i64,
         block_id: proposal.block_id.map(|id| BlockId {
             hash: id.hash.to_vec(),

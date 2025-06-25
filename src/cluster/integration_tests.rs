@@ -737,9 +737,10 @@ fn new_leader_signing() {
     }
 }
 
+// im struggling to implement network partition and any other scenarios :/
 #[test]
 fn some_turbulence() {
-    let mut harness = TestHarness::new(3);
+    let mut harness = TestHarness::new(7);
 
     let initial_leader = harness.wait_for_leader(Duration::from_secs(10)).unwrap();
 
@@ -748,8 +749,13 @@ fn some_turbulence() {
     let req_bytes = create_proposal_request_bytes(100, 0);
     handle1.request_sender.send(req_bytes).unwrap();
 
-    harness.shutdown_node(initial_leader.node_id()).unwrap(); // kill the leader
-
+    harness.shutdown_node(initial_leader.node_id()).unwrap();
+    thread::sleep(Duration::from_millis(500));
+    let another_leader = harness.wait_for_leader(Duration::from_secs(5)).unwrap();
+    harness.shutdown_node(another_leader.node_id()).unwrap();
+    thread::sleep(Duration::from_millis(500));
+    let yet_another_leader = harness.wait_for_leader(Duration::from_secs(5)).unwrap();
+    harness.shutdown_node(yet_another_leader.node_id()).unwrap();
     thread::sleep(Duration::from_millis(500));
 
     let new_leader = harness.wait_for_leader(Duration::from_secs(3)).unwrap();
@@ -762,8 +768,31 @@ fn some_turbulence() {
 
     match response_msg.sum {
         Some(v0_38::privval::message::Sum::SignedProposalResponse(res)) => {
-            assert!(res.error.is_none(), "2-node cluster should still work");
+            assert!(res.error.is_none(), "4-node cluster should still work");
         }
         _ => panic!("Expected SignedProposalResponse"),
     }
+}
+
+#[test]
+fn too_much_turbulence() {
+    let mut harness = TestHarness::new(7);
+
+    let initial_leader = harness.wait_for_leader(Duration::from_secs(10)).unwrap();
+
+    harness.shutdown_node(initial_leader.node_id()).unwrap();
+    thread::sleep(Duration::from_millis(500));
+    let another_leader = harness.wait_for_leader(Duration::from_secs(5)).unwrap();
+    harness.shutdown_node(another_leader.node_id()).unwrap();
+    thread::sleep(Duration::from_millis(500));
+    let yet_another_leader = harness.wait_for_leader(Duration::from_secs(5)).unwrap();
+    harness.shutdown_node(yet_another_leader.node_id()).unwrap();
+    thread::sleep(Duration::from_millis(500));
+    let too_much_leaders = harness.wait_for_leader(Duration::from_secs(5)).unwrap();
+    harness.shutdown_node(too_much_leaders.node_id()).unwrap();
+    thread::sleep(Duration::from_millis(500));
+
+    let new_leader = harness.wait_for_leader(Duration::from_secs(3));
+
+    assert!(new_leader.is_none(), "leader election should fail");
 }
