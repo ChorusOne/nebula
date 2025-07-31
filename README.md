@@ -1,5 +1,5 @@
 # Nebula - the CometBFT Remote signer, written in Rust
-
+# NOTE: THIS IS AN ALPHA VERSION OF THE SIGNER!
 
 ## Supported backends
 - Native signing
@@ -125,6 +125,8 @@ buf generate --template buf.gen.yaml
 ```
 
 
+```
+
    89  sudo apt update && sudo apt install vault
    94  vault secrets enable transit
    98  vault transit import transit/keys/validator-key @privkey.pk8.b64 type=ed25519 exportable=true
@@ -146,3 +148,4 @@ buf generate --template buf.gen.yaml
   194  vault read -format=json transit/keys/validator-key   | jq -r '.data'
   207  history | grep vault
 root@ha-signer03:~#
+```
