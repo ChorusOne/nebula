@@ -50,12 +50,15 @@ impl ProtocolVersion for VersionV0_38 {
     ) -> Result<Vec<u8>, SignerError> {
         let mut buf = Vec::new();
         let msg = match response {
-            Response::SignedVote(resp) => v0_38::privval::message::Sum::SignedVoteResponse(resp),
-            Response::SignedProposal(resp) => {
+            Response::SignedVote((resp, _)) => {
+                v0_38::privval::message::Sum::SignedVoteResponse(resp)
+            }
+            Response::SignedProposal((resp, _)) => {
                 v0_38::privval::message::Sum::SignedProposalResponse(resp)
             }
             Response::Ping(resp) => v0_38::privval::message::Sum::PingResponse(resp),
             Response::PublicKey(resp) => v0_38::privval::message::Sum::PubKeyResponse(resp),
+            Response::WouldDoubleSign => return Err(SignerError::DoubleSignError),
         };
         v0_38::privval::Message { sum: Some(msg) }.encode_length_delimited(&mut buf)?;
         Ok(buf)

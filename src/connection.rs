@@ -1,9 +1,9 @@
-use crate::{cluster::SignerRaftNode, error::SignerError};
+use crate::error::SignerError;
 use ed25519_consensus::SigningKey;
-use log::{error, info, warn};
+use log::{error, info};
+use std::net::TcpStream;
 use std::thread::sleep;
 use std::time::Duration;
-use std::{net::TcpStream, sync::Arc};
 use tendermint_p2p::secret_connection::{self, SecretConnection};
 
 pub fn open_secret_connection(
@@ -11,13 +11,8 @@ pub fn open_secret_connection(
     port: u16,
     identity_key: SigningKey,
     protocol_version: secret_connection::Version,
-    raft_node: &Arc<SignerRaftNode>,
 ) -> Result<SecretConnection<TcpStream>, SignerError> {
     loop {
-        if !raft_node.is_leader() {
-            warn!("Not the leader");
-            return Err(SignerError::TODO);
-        }
         let socket = match TcpStream::connect(format!("{host}:{port}")) {
             Ok(s) => s,
             Err(e) => {

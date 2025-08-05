@@ -4,7 +4,7 @@ use crate::error::SignerError;
 use crate::proto::v1;
 use crate::protocol::{Request, Response};
 use crate::types::{BlockId, PartSetHeader, Proposal, SignedMsgType, Vote};
-use log::{info, trace};
+use log::trace;
 use prost::Message;
 
 pub struct VersionV1_0;
@@ -54,12 +54,13 @@ impl ProtocolVersion for VersionV1_0 {
     ) -> Result<Vec<u8>, SignerError> {
         let mut buf = Vec::new();
         let msg = match response {
-            Response::SignedVote(resp) => v1::privval::message::Sum::SignedVoteResponse(resp),
-            Response::SignedProposal(resp) => {
+            Response::SignedVote((resp, _)) => v1::privval::message::Sum::SignedVoteResponse(resp),
+            Response::SignedProposal((resp, _)) => {
                 v1::privval::message::Sum::SignedProposalResponse(resp)
             }
             Response::Ping(resp) => v1::privval::message::Sum::PingResponse(resp),
             Response::PublicKey(resp) => v1::privval::message::Sum::PubKeyResponse(resp),
+            Response::WouldDoubleSign => return Err(SignerError::DoubleSignError),
         };
         v1::privval::Message { sum: Some(msg) }.encode_length_delimited(&mut buf)?;
         Ok(buf)

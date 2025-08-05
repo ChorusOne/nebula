@@ -51,7 +51,7 @@ impl SignerRaftNode {
         Ok(())
     }
 
-    pub fn new(config: RaftConfig) -> Arc<Self> {
+    pub fn new(config: RaftConfig) -> Self {
         let logger = stdlog_to_slog();
         let storage = create_storage(&config);
         let signer_state = Arc::new(RwLock::new(storage.read_signer_state().unwrap()));
@@ -73,16 +73,16 @@ impl SignerRaftNode {
             Arc::clone(&raft_state),
         );
 
-        Arc::new(SignerRaftNode {
+        SignerRaftNode {
             signer_state,
             proposal_sender: in_tx,
             raft_state,
             node_id: config.node_id,
             shutdown_handle: Arc::new(RwLock::new(Some(handle))),
-        })
+        }
     }
 
-    pub fn replicate_state(&self, new_state: ConsensusData) -> Result<(), SignerError> {
+    pub fn replicate_state(&self, new_state: &ConsensusData) -> Result<(), SignerError> {
         info!(
             "replicating state: {}, leader_id: {}",
             new_state,
@@ -96,7 +96,7 @@ impl SignerRaftNode {
 
         let (tx, rx) = mpsc::channel();
         self.proposal_sender
-            .send(RaftMessage::Propose(new_state, tx))
+            .send(RaftMessage::Propose(*new_state, tx))
             .map_err(|e| {
                 SignerError::Other(format!("Failed to send proposal to raft thread: {}", e))
             })?;

@@ -1,4 +1,4 @@
-use crate::types::{Proposal, Vote};
+use crate::types::{ConsensusData, Proposal, Vote};
 
 #[derive(Debug)]
 pub enum Request {
@@ -9,9 +9,11 @@ pub enum Request {
 }
 
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Response<P, V, K, G> {
-    SignedProposal(P),
-    SignedVote(V),
+    SignedProposal((P, ConsensusData)),
+    SignedVote((V, ConsensusData)),
     PublicKey(K),
     Ping(G),
+    WouldDoubleSign,
 }

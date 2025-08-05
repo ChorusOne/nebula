@@ -1,7 +1,8 @@
 use crate::backend::SigningBackend;
 use crate::error::SignerError;
 use crate::protocol::{Request, Response};
-use crate::types::{BufferError, SignedMsgType};
+use crate::safeguards;
+use crate::types::{BufferError, ConsensusData, SignedMsgType};
 use crate::versions::ProtocolVersion;
 use log::{debug, info};
 use prost::Message as _;
@@ -30,11 +31,15 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
     // TODO: the signing and sending sig should be split further maybe?
     pub fn process_request(
         &mut self,
-        request: Request,
+        current_state: &ConsensusData,
+        request: &Request,
     ) -> Result<
         Response<V::ProposalResponse, V::VoteResponse, V::PubKeyResponse, V::PingResponse>,
         SignerError,
     > {
+        if safeguards::would_double_sign(&current_state, &request) {
+            return Ok(Response::WouldDoubleSign);
+        }
         let response = match request {
             Request::SignProposal(proposal) => {
                 let signable_data = V::proposal_to_bytes(&proposal, &self.chain_id)?;
@@ -42,13 +47,20 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
                 debug!("Signature: {}", hex::encode(&signature));
                 debug!("Signable data: {}", hex::encode(&signable_data));
 
-                Response::SignedProposal(V::create_proposal_response(
-                    Some(proposal.clone()),
-                    signature,
-                    None,
-                ))
+                let response = V::create_proposal_response(Some(proposal.clone()), signature, None);
+                let new_state = ConsensusData {
+                    height: proposal.height,
+                    round: proposal.round,
+                    step: SignedMsgType::Proposal as u8,
+                };
+                Response::SignedProposal((response, new_state))
             }
             Request::SignVote(vote) => {
+                let new_state = ConsensusData {
+                    height: vote.height,
+                    round: vote.round,
+                    step: vote.step.into(),
+                };
                 // TODO: chain id should be parsed from the request, and compared to what we're expecting
                 // ^ no chain_id in the request. if we configure wrong chain_id in the config
                 // ^ actually it IS in the request and it IS in the canonical vote / proposal
@@ -73,22 +85,19 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
                         hex::encode(&extension_signable_data)
                     );
                     debug!("Extension signature: {}", hex::encode(&ext_signature));
-                    return Ok(Response::SignedVote(V::create_vote_response(
+                    let response = V::create_vote_response(
                         Some(vote.clone()),
                         signature,
                         Some(ext_signature),
                         None,
-                    )));
+                    );
+                    return Ok(Response::SignedVote((response, new_state)));
                 }
                 info!("no vote ext this time");
                 debug!("Signature: {}", hex::encode(&signature));
                 debug!("Signable data: {}", hex::encode(&signable_data));
-                Response::SignedVote(V::create_vote_response(
-                    Some(vote.clone()),
-                    signature,
-                    None,
-                    None,
-                ))
+                let response = V::create_vote_response(Some(vote.clone()), signature, None, None);
+                Response::SignedVote((response, new_state))
             }
             Request::ShowPublicKey => {
                 let public_key = self.signer.public_key().unwrap();
