@@ -37,10 +37,17 @@ impl ProtocolVersion for VersionV0_37 {
         todo!("0.37")
     }
 
+    fn create_error_vote_response(_error: &str) -> Self::VoteResponse {
+        todo!()
+    }
+
+    fn create_error_prop_response(_error: &str) -> Self::ProposalResponse {
+        todo!()
+    }
+
     fn create_proposal_response(
-        _proposal: Option<Proposal>,
+        _proposal: &Proposal,
         _signature: Vec<u8>,
-        _error: Option<String>,
     ) -> Self::ProposalResponse {
         todo!()
     }

@@ -37,17 +37,21 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
         Response<V::ProposalResponse, V::VoteResponse, V::PubKeyResponse, V::PingResponse>,
         SignerError,
     > {
-        if safeguards::would_double_sign(&current_state, &request) {
-            return Ok(Response::WouldDoubleSign);
-        }
         let response = match request {
             Request::SignProposal(proposal) => {
+                if !safeguards::should_sign_proposal(&current_state, &proposal) {
+                    let response = V::create_error_prop_response(
+                        "Would double-sign proposal at same height/round/step",
+                    );
+
+                    return Ok(Response::SignedProposal((response, *current_state)));
+                }
                 let signable_data = V::proposal_to_bytes(&proposal, &self.chain_id)?;
                 let signature = self.signer.sign(&signable_data).unwrap();
                 debug!("Signature: {}", hex::encode(&signature));
                 debug!("Signable data: {}", hex::encode(&signable_data));
 
-                let response = V::create_proposal_response(Some(proposal.clone()), signature, None);
+                let response = V::create_proposal_response(&proposal, signature);
                 let new_state = ConsensusData {
                     height: proposal.height,
                     round: proposal.round,
@@ -56,6 +60,13 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
                 Response::SignedProposal((response, new_state))
             }
             Request::SignVote(vote) => {
+                if !safeguards::should_sign_vote(&current_state, &vote) {
+                    let response = V::create_error_vote_response(
+                        "Would double-sign vote at same height/round",
+                    );
+
+                    return Ok(Response::SignedVote((response, *current_state)));
+                }
                 let new_state = ConsensusData {
                     height: vote.height,
                     round: vote.round,

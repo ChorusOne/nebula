@@ -3,7 +3,6 @@ mod cluster;
 mod config;
 mod connection;
 mod error;
-mod handler;
 mod persist;
 mod proto;
 mod protocol;
@@ -147,6 +146,7 @@ fn handle_connection<V: ProtocolVersion + Send + 'static>(
     let mut signer = create_signer::<V>(&host, port, &identity_key, &config)?;
 
     loop {
+        info!("host {host}:{port}");
         let response = handle_single_request(&mut signer, &persist);
         if let Err(ref e) = response {
             error!("Error handling request from {}:{} - {}", host, port, e);
@@ -166,7 +166,7 @@ pub fn handle_single_request<T: SigningBackend, V: ProtocolVersion, C: Read + Wr
 ) -> Result<(), SignerError> {
     let start = std::time::Instant::now();
     let request = signer.read_request()?;
-    info!("Received request after {:?}", start.elapsed());
+    info!("Received request {:?} after {:?}", start.elapsed(), request);
 
     let start = std::time::Instant::now();
     let mut guard = persist.lock().unwrap();
@@ -177,10 +177,6 @@ pub fn handle_single_request<T: SigningBackend, V: ProtocolVersion, C: Read + Wr
     let start = std::time::Instant::now();
     info!("persisting");
     match response {
-        protocol::Response::WouldDoubleSign => {
-            debug!("For state {consensus_state:?} request {request:?} would double sign");
-            return Ok(());
-        }
         protocol::Response::SignedProposal((_, new_state)) => guard.persist(&new_state).unwrap(),
         protocol::Response::SignedVote((_, new_state)) => guard.persist(&new_state).unwrap(),
         protocol::Response::PublicKey(_) => (),

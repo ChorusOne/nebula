@@ -15,5 +15,4 @@ pub enum Response<P, V, K, G> {
     SignedVote((V, ConsensusData)),
     PublicKey(K),
     Ping(G),
-    WouldDoubleSign,
 }

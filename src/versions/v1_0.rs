@@ -60,7 +60,6 @@ impl ProtocolVersion for VersionV1_0 {
             }
             Response::Ping(resp) => v1::privval::message::Sum::PingResponse(resp),
             Response::PublicKey(resp) => v1::privval::message::Sum::PubKeyResponse(resp),
-            Response::WouldDoubleSign => return Err(SignerError::DoubleSignError),
         };
         v1::privval::Message { sum: Some(msg) }.encode_length_delimited(&mut buf)?;
         Ok(buf)
@@ -152,18 +151,34 @@ impl ProtocolVersion for VersionV1_0 {
         Ok(bytes)
     }
 
-    fn create_proposal_response(
-        proposal: Option<Proposal>,
-        signature: Vec<u8>,
-        error: Option<String>,
-    ) -> Self::ProposalResponse {
+    fn create_error_vote_response(error: &str) -> Self::VoteResponse {
+        v1::privval::SignedVoteResponse {
+            vote: None,
+            error: Some(v1::privval::RemoteSignerError {
+                code: 1,
+                description: error.to_string(),
+            }),
+        }
+    }
+
+    fn create_error_prop_response(error: &str) -> Self::ProposalResponse {
         v1::privval::SignedProposalResponse {
-            proposal: proposal.map(|proposal| v1::types::Proposal {
+            proposal: None,
+            error: Some(v1::privval::RemoteSignerError {
+                code: 1,
+                description: error.to_string(),
+            }),
+        }
+    }
+
+    fn create_proposal_response(proposal: &Proposal, signature: Vec<u8>) -> Self::ProposalResponse {
+        v1::privval::SignedProposalResponse {
+            proposal: Some(v1::types::Proposal {
                 r#type: proposal.step as i32,
                 height: proposal.height,
                 round: proposal.round as i32,
                 pol_round: proposal.pol_round as i32,
-                block_id: proposal.block_id.map(|id| v1::types::BlockId {
+                block_id: proposal.block_id.clone().map(|id| v1::types::BlockId {
                     hash: id.hash.into(),
                     part_set_header: id.parts.map(|p| v1::types::PartSetHeader {
                         total: p.total,
@@ -176,10 +191,7 @@ impl ProtocolVersion for VersionV1_0 {
                 }),
                 signature: signature.into(),
             }),
-            error: error.map(|desc| v1::privval::RemoteSignerError {
-                code: 1,
-                description: desc,
-            }),
+            error: None,
         }
     }
 
