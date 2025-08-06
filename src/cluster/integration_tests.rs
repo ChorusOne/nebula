@@ -262,7 +262,7 @@ fn double_sign_prevention() {
 
     let leader_node = unwrap_node(leader);
     leader_node
-        .transfer_leadership(leader_node.node_id() % 3 + 1)
+        .transfer_leadership(followers[0].node_id)
         .unwrap();
 
     followers.push(leader_node);
@@ -335,7 +335,7 @@ fn leader_election_during_signing() {
     thread::sleep(Duration::from_millis(500));
 
     println!("initial leader id: {}", initial_leader_id);
-    let transferee_id = (initial_leader_id % 3) + 1;
+    let transferee_id = followers[0].node_id;
     info!(
         "Transferring leadership from {} to {}",
         initial_leader_id, transferee_id
@@ -555,7 +555,6 @@ fn double_sign_prevention_after_leadership_change() {
     let harness = TestHarness::new(3);
     let nodes = harness.nodes;
     let (initial_leader, mut followers) = wait_for_leader_and_pop(nodes);
-    let initial_leader_id = initial_leader.raft_state.read().unwrap().1;
 
     let (mut signer1, handle1) = create_signer_with_mock_conn();
 
@@ -578,7 +577,7 @@ fn double_sign_prevention_after_leadership_change() {
 
     let initial_leader = unwrap_node(leader);
     initial_leader
-        .transfer_leadership(initial_leader_id % 3 + 1)
+        .transfer_leadership(followers[0].node_id)
         .unwrap();
     thread::sleep(Duration::from_millis(2000));
 
