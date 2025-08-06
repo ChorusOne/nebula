@@ -17,7 +17,7 @@ pub enum PersistVariants {
 #[enum_dispatch]
 pub trait Persist {
     fn persist(&mut self, state: &ConsensusData) -> Result<(), PersistError>;
-    fn state(&self) -> Result<ConsensusData, PersistError>;
+    fn state(&self) -> ConsensusData;
 }
 
 pub struct LocalState {
@@ -35,8 +35,8 @@ impl Persist for LocalState {
         self.state = *state;
         Ok(())
     }
-    fn state(&self) -> Result<ConsensusData, PersistError> {
-        Ok(self.state)
+    fn state(&self) -> ConsensusData {
+        self.state
     }
 }
 
@@ -50,10 +50,7 @@ impl Persist for SignerRaftNode {
         }
         Ok(())
     }
-    fn state(&self) -> Result<ConsensusData, PersistError> {
-        if !self.is_leader() {
-            return Err(PersistError::InvalidState);
-        }
-        Ok(*self.signer_state.read().unwrap())
+    fn state(&self) -> ConsensusData {
+        *self.signer_state.read().unwrap()
     }
 }

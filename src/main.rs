@@ -173,15 +173,15 @@ pub fn handle_single_request<T: SigningBackend, V: ProtocolVersion, C: Read + Wr
 
     let start = std::time::Instant::now();
     let mut guard = persist.lock().unwrap();
-    let consensus_state = guard.state().unwrap();
+    let consensus_state = guard.state();
     let response = signer.process_request(&consensus_state, &request)?;
     info!("Processing request took: {:?}", start.elapsed());
 
     let start = std::time::Instant::now();
     debug!("Persisting state");
     match response {
-        protocol::Response::SignedProposal((_, new_state)) => guard.persist(&new_state).unwrap(),
-        protocol::Response::SignedVote((_, new_state)) => guard.persist(&new_state).unwrap(),
+        protocol::Response::SignedProposal((_, new_state)) => guard.persist(&new_state)?,
+        protocol::Response::SignedVote((_, new_state)) => guard.persist(&new_state)?,
         protocol::Response::PublicKey(_) => (),
         protocol::Response::Ping(_) => (),
     }
@@ -189,6 +189,8 @@ pub fn handle_single_request<T: SigningBackend, V: ProtocolVersion, C: Read + Wr
 
     debug!("Sending response to validator");
     signer.send_response(response)?;
+    drop(guard); // we need to drop the guard _after_ sending the response to avoid 
+    // race conditions
     info!("Sending the response took: {:?}", start.elapsed());
     Ok(())
 }
