@@ -1,7 +1,6 @@
 use crate::backend::{Ed25519Signer, SigningBackend};
 use crate::cluster::SignerRaftNode;
 use crate::config::{PeerConfig, RaftConfig};
-use crate::error::SignerError;
 use crate::handle_single_request;
 use crate::persist::{Persist, PersistVariants};
 use crate::proto::v0_38;
@@ -55,38 +54,6 @@ fn wait_for_leader_and_pop(
     let leader_node = nodes.remove(leader_idx);
 
     (leader_node, nodes)
-}
-
-fn followers(nodes: &[SignerRaftNode]) -> Vec<&SignerRaftNode> {
-    nodes.iter().filter(|n| !n.is_leader()).collect()
-}
-
-pub fn shutdown_node(
-    mut nodes: Vec<SignerRaftNode>,
-    node_id: u64,
-) -> Result<Vec<SignerRaftNode>, SignerError> {
-    if let Some(node) = nodes.iter().find(|n| n.node_id == node_id) {
-        node.shutdown()?;
-    }
-    nodes.retain(|n| n.node_id != node_id);
-    Ok(nodes)
-}
-
-pub fn shutdown_followers(mut nodes: Vec<SignerRaftNode>) -> Result<(), SignerError> {
-    let leader_id = wait_for_leader(&nodes, Duration::from_secs(5))
-        .ok_or_else(|| SignerError::Other("No leader found".to_string()))?
-        .node_id;
-
-    let follower_ids: Vec<u64> = followers(&nodes)
-        .iter()
-        .filter(|n| n.node_id != leader_id)
-        .map(|n| n.node_id)
-        .collect();
-
-    for id in follower_ids {
-        nodes = shutdown_node(nodes, id)?;
-    }
-    Ok(())
 }
 
 fn create_signer_with_mock_conn() -> (
@@ -451,11 +418,12 @@ fn signing_old_blocks_after_state_advancement() {
     }
 }
 
-/*
 #[test]
 fn mixed_vote_types_with_state_transitions() {
     let harness = TestHarness::new(1);
-    let leader = harness.wait_for_leader(Duration::from_secs(5)).unwrap();
+    let nodes = harness.nodes;
+    let (leader_node, _) = wait_for_leader_and_pop(nodes);
+    let leader = Arc::new(Mutex::new(PersistVariants::Raft(leader_node)));
     let (mut signer, handle) = create_signer_with_mock_conn();
 
     let height = 300;
@@ -463,22 +431,22 @@ fn mixed_vote_types_with_state_transitions() {
 
     let proposal_bytes = create_proposal_request_bytes(height, round);
     handle.request_sender.send(proposal_bytes).unwrap();
-    assert!(harness.handle_request(&mut signer, &leader).is_ok());
+    assert!(handle_single_request(&mut signer, &leader).is_ok());
     handle.response_receiver.recv().unwrap();
 
     let prevote_bytes = create_vote_request_bytes(height, round, SignedMsgType::Prevote);
     handle.request_sender.send(prevote_bytes).unwrap();
-    assert!(harness.handle_request(&mut signer, &leader).is_ok());
+    assert!(handle_single_request(&mut signer, &leader).is_ok());
     handle.response_receiver.recv().unwrap();
 
     let precommit_bytes = create_vote_request_bytes(height, round, SignedMsgType::Precommit);
     handle.request_sender.send(precommit_bytes).unwrap();
-    assert!(harness.handle_request(&mut signer, &leader).is_ok());
+    assert!(handle_single_request(&mut signer, &leader).is_ok());
     handle.response_receiver.recv().unwrap();
 
     let duplicate_prevote_bytes = create_vote_request_bytes(height, round, SignedMsgType::Prevote);
     handle.request_sender.send(duplicate_prevote_bytes).unwrap();
-    harness.handle_request(&mut signer, &leader).unwrap();
+    handle_single_request(&mut signer, &leader).unwrap();
 
     let response_bytes = handle.response_receiver.recv().unwrap();
     let response_msg =
@@ -495,25 +463,22 @@ fn mixed_vote_types_with_state_transitions() {
 #[test]
 fn leadership_handoff() {
     let harness = TestHarness::new(3);
-    let leader = harness.wait_for_leader(Duration::from_secs(10)).unwrap();
-    let leader_id = leader.raft_state.read().unwrap().1;
+    let nodes = harness.nodes;
+    let (leader_node, followers) = wait_for_leader_and_pop(nodes);
 
     let (mut signer, handle) = create_signer_with_mock_conn();
 
     let req_bytes = create_proposal_request_bytes(400, 0);
     handle.request_sender.send(req_bytes).unwrap();
 
-    let leader_clone = Arc::clone(&leader);
-    leader_clone
-        .transfer_leadership(leader_clone.node_id % 3 + 1)
+    leader_node
+        .transfer_leadership(followers[0].node_id)
         .unwrap();
-    thread::spawn(move || {
-        thread::sleep(Duration::from_millis(100));
-        drop(leader_clone);
-    });
 
     thread::sleep(Duration::from_millis(200));
-    let result = harness.handle_request(&mut signer, &leader);
+
+    let leader = Arc::new(Mutex::new(PersistVariants::Raft(leader_node)));
+    let result = handle_single_request(&mut signer, &leader);
 
     match result {
         Err(_) => println!("Request correctly failed due to leadership loss"),
@@ -534,20 +499,16 @@ fn leadership_handoff() {
         }
     }
 
-    let remaining_nodes: Vec<_> = harness
-        .nodes
-        .iter()
-        .cloned()
-        .filter(|n| n.raft_state.read().unwrap().1 != leader_id)
-        .collect();
-    let new_leader = wait_for_leader(&remaining_nodes, Duration::from_secs(30));
+    let new_leader = wait_for_leader(&followers, Duration::from_secs(30));
     assert!(new_leader.is_some(), "New leader should be elected");
 }
 
 #[test]
 fn rapid_round_advancement() {
     let harness = TestHarness::new(1);
-    let leader = harness.wait_for_leader(Duration::from_secs(5)).unwrap();
+    let nodes = harness.nodes;
+    let (leader_node, _) = wait_for_leader_and_pop(nodes);
+    let leader = Arc::new(Mutex::new(PersistVariants::Raft(leader_node)));
     let (mut signer, handle) = create_signer_with_mock_conn();
 
     let height = 500;
@@ -556,7 +517,7 @@ fn rapid_round_advancement() {
         let proposal_bytes = create_proposal_request_bytes(height, round);
         handle.request_sender.send(proposal_bytes).unwrap();
 
-        let result = harness.handle_request(&mut signer, &leader);
+        let result = handle_single_request(&mut signer, &leader);
         assert!(
             result.is_ok(),
             "Should be able to sign proposal at round {}",
@@ -567,7 +528,7 @@ fn rapid_round_advancement() {
         if round > 0 {
             let old_round_bytes = create_proposal_request_bytes(height, round - 1);
             handle.request_sender.send(old_round_bytes).unwrap();
-            harness.handle_request(&mut signer, &leader).unwrap();
+            handle_single_request(&mut signer, &leader).unwrap();
 
             let response_bytes = handle.response_receiver.recv().unwrap();
             let response_msg =
@@ -592,8 +553,8 @@ fn rapid_round_advancement() {
 #[test]
 fn double_sign_prevention_after_leadership_change() {
     let harness = TestHarness::new(3);
-
-    let initial_leader = harness.wait_for_leader(Duration::from_secs(10)).unwrap();
+    let nodes = harness.nodes;
+    let (initial_leader, mut followers) = wait_for_leader_and_pop(nodes);
     let initial_leader_id = initial_leader.raft_state.read().unwrap().1;
 
     let (mut signer1, handle1) = create_signer_with_mock_conn();
@@ -601,9 +562,8 @@ fn double_sign_prevention_after_leadership_change() {
     let req_bytes = create_proposal_request_bytes(100, 0);
     handle1.request_sender.send(req_bytes).unwrap();
 
-    harness
-        .handle_request(&mut signer1, &initial_leader)
-        .unwrap();
+    let leader = Arc::new(Mutex::new(PersistVariants::Raft(initial_leader)));
+    handle_single_request(&mut signer1, &leader).unwrap();
 
     let response_bytes = handle1.response_receiver.recv().unwrap();
     let response_msg =
@@ -616,19 +576,23 @@ fn double_sign_prevention_after_leadership_change() {
         _ => panic!("Expected SignedProposalResponse"),
     }
 
+    let initial_leader = unwrap_node(leader);
     initial_leader
         .transfer_leadership(initial_leader_id % 3 + 1)
         .unwrap();
     thread::sleep(Duration::from_millis(2000));
 
-    let new_leader = harness.wait_for_leader(Duration::from_secs(15)).unwrap();
+    followers.push(initial_leader);
+    let nodes = followers;
+    let (new_leader_node, _) = wait_for_leader_and_pop(nodes);
 
     let (mut signer2, handle2) = create_signer_with_mock_conn();
 
     let duplicate_req_bytes = create_proposal_request_bytes(100, 0);
     handle2.request_sender.send(duplicate_req_bytes).unwrap();
 
-    harness.handle_request(&mut signer2, &new_leader).unwrap();
+    let new_leader = Arc::new(Mutex::new(PersistVariants::Raft(new_leader_node)));
+    handle_single_request(&mut signer2, &new_leader).unwrap();
 
     let response_bytes2 = handle2.response_receiver.recv().unwrap();
     let response_msg2 =
@@ -650,7 +614,7 @@ fn double_sign_prevention_after_leadership_change() {
     let new_req_bytes = create_proposal_request_bytes(101, 0);
     handle2.request_sender.send(new_req_bytes).unwrap();
 
-    harness.handle_request(&mut signer2, &new_leader).unwrap();
+    handle_single_request(&mut signer2, &new_leader).unwrap();
 
     let response_bytes3 = handle2.response_receiver.recv().unwrap();
     let response_msg3 =
@@ -666,56 +630,45 @@ fn double_sign_prevention_after_leadership_change() {
 
 #[test]
 fn no_replicate_acks() {
-    let mut harness = TestHarness::new(3);
-
-    let initial_leader = harness.wait_for_leader(Duration::from_secs(10)).unwrap();
+    let harness = TestHarness::new(3);
+    let nodes = harness.nodes;
+    let (initial_leader, followers) = wait_for_leader_and_pop(nodes);
 
     let (mut signer1, handle1) = create_signer_with_mock_conn();
 
     let req_bytes = create_proposal_request_bytes(100, 0);
     handle1.request_sender.send(req_bytes).unwrap();
 
-    harness.shutdown_followers().unwrap();
+    for follower in &followers {
+        follower.shutdown().unwrap();
+    }
 
     thread::sleep(Duration::from_millis(500));
 
-    harness
-        .handle_request(&mut signer1, &initial_leader)
-        .unwrap();
-
-    let response_bytes = handle1.response_receiver.recv().unwrap();
-    let response_msg =
-        v0_38::privval::Message::decode_length_delimited(response_bytes.as_slice()).unwrap();
-
-    match response_msg.sum {
-        Some(v0_38::privval::message::Sum::SignedProposalResponse(res)) => {
-            assert!(
-                res.error.is_some(),
-                "Replication should fail without followers"
-            );
-        }
-        _ => panic!("Expected SignedProposalResponse"),
-    }
+    let leader = Arc::new(Mutex::new(PersistVariants::Raft(initial_leader)));
+    handle_single_request(&mut signer1, &leader)
+        .expect_err("Replication should fail without followers");
 }
 
 #[test]
 fn new_leader_signing() {
-    let mut harness = TestHarness::new(3);
-
-    let initial_leader = harness.wait_for_leader(Duration::from_secs(10)).unwrap();
+    let harness = TestHarness::new(3);
+    let nodes = harness.nodes;
+    let (initial_leader, followers) = wait_for_leader_and_pop(nodes);
 
     let (mut signer1, handle1) = create_signer_with_mock_conn();
 
     let req_bytes = create_proposal_request_bytes(100, 0);
     handle1.request_sender.send(req_bytes).unwrap();
 
-    harness.shutdown_node(initial_leader.node_id()).unwrap();
+    initial_leader.shutdown().unwrap();
 
     thread::sleep(Duration::from_millis(500));
 
-    let new_leader = harness.wait_for_leader(Duration::from_secs(2)).unwrap();
+    let (new_leader_node, _) = wait_for_leader_and_pop(followers);
 
-    harness.handle_request(&mut signer1, &new_leader).unwrap();
+    let new_leader = Arc::new(Mutex::new(PersistVariants::Raft(new_leader_node)));
+    handle_single_request(&mut signer1, &new_leader).unwrap();
 
     let response_bytes = handle1.response_receiver.recv().unwrap();
     let response_msg =
@@ -732,27 +685,31 @@ fn new_leader_signing() {
 // im struggling to implement network partition and any other scenarios :/
 #[test]
 fn some_turbulence() {
-    let mut harness = TestHarness::new(7);
+    let harness = TestHarness::new(7);
+    let nodes = harness.nodes;
 
-    let initial_leader = harness.wait_for_leader(Duration::from_secs(10)).unwrap();
+    let (initial_leader, remaining_nodes) = wait_for_leader_and_pop(nodes);
 
     let (mut signer1, handle1) = create_signer_with_mock_conn();
 
     let req_bytes = create_proposal_request_bytes(100, 0);
     handle1.request_sender.send(req_bytes).unwrap();
 
-    harness.shutdown_node(initial_leader.node_id()).unwrap();
-    thread::sleep(Duration::from_millis(500));
-    let another_leader = harness.wait_for_leader(Duration::from_secs(5)).unwrap();
-    harness.shutdown_node(another_leader.node_id()).unwrap();
-    thread::sleep(Duration::from_millis(500));
-    let yet_another_leader = harness.wait_for_leader(Duration::from_secs(5)).unwrap();
-    harness.shutdown_node(yet_another_leader.node_id()).unwrap();
+    initial_leader.shutdown().unwrap();
     thread::sleep(Duration::from_millis(500));
 
-    let new_leader = harness.wait_for_leader(Duration::from_secs(3)).unwrap();
+    let (another_leader, remaining_nodes) = wait_for_leader_and_pop(remaining_nodes);
+    another_leader.shutdown().unwrap();
+    thread::sleep(Duration::from_millis(500));
 
-    harness.handle_request(&mut signer1, &new_leader).unwrap();
+    let (yet_another_leader, remaining_nodes) = wait_for_leader_and_pop(remaining_nodes);
+    yet_another_leader.shutdown().unwrap();
+    thread::sleep(Duration::from_millis(500));
+
+    let (new_leader_node, _) = wait_for_leader_and_pop(remaining_nodes);
+
+    let new_leader = Arc::new(Mutex::new(PersistVariants::Raft(new_leader_node)));
+    handle_single_request(&mut signer1, &new_leader).unwrap();
 
     let response_bytes = handle1.response_receiver.recv().unwrap();
     let response_msg =
@@ -768,24 +725,27 @@ fn some_turbulence() {
 
 #[test]
 fn too_much_turbulence() {
-    let mut harness = TestHarness::new(7);
+    let harness = TestHarness::new(7);
+    let nodes = harness.nodes;
 
-    let initial_leader = harness.wait_for_leader(Duration::from_secs(10)).unwrap();
+    let (initial_leader, remaining_nodes) = wait_for_leader_and_pop(nodes);
 
-    harness.shutdown_node(initial_leader.node_id()).unwrap();
-    thread::sleep(Duration::from_millis(500));
-    let another_leader = harness.wait_for_leader(Duration::from_secs(5)).unwrap();
-    harness.shutdown_node(another_leader.node_id()).unwrap();
-    thread::sleep(Duration::from_millis(500));
-    let yet_another_leader = harness.wait_for_leader(Duration::from_secs(5)).unwrap();
-    harness.shutdown_node(yet_another_leader.node_id()).unwrap();
-    thread::sleep(Duration::from_millis(500));
-    let too_much_leaders = harness.wait_for_leader(Duration::from_secs(5)).unwrap();
-    harness.shutdown_node(too_much_leaders.node_id()).unwrap();
+    initial_leader.shutdown().unwrap();
     thread::sleep(Duration::from_millis(500));
 
-    let new_leader = harness.wait_for_leader(Duration::from_secs(3));
+    let (another_leader, remaining_nodes) = wait_for_leader_and_pop(remaining_nodes);
+    another_leader.shutdown().unwrap();
+    thread::sleep(Duration::from_millis(500));
+
+    let (yet_another_leader, remaining_nodes) = wait_for_leader_and_pop(remaining_nodes);
+    yet_another_leader.shutdown().unwrap();
+    thread::sleep(Duration::from_millis(500));
+
+    let (too_much_leaders, remaining_nodes) = wait_for_leader_and_pop(remaining_nodes);
+    too_much_leaders.shutdown().unwrap();
+    thread::sleep(Duration::from_millis(500));
+
+    let new_leader = wait_for_leader(&remaining_nodes, Duration::from_secs(3));
 
     assert!(new_leader.is_none(), "leader election should fail");
 }
-*/
