@@ -308,24 +308,24 @@ fn double_sign_prevention() {
         .expect_err("Request must fail, payload is sent twice");
 }
 
-/*
 #[test]
 fn leader_election_during_signing() {
     let harness = TestHarness::new(3);
-    let initial_leader = harness
-        .wait_for_leader(Duration::from_secs(10))
-        .expect("Failed to elect a leader");
+    let nodes = harness.nodes;
+    let (initial_leader, mut followers) = wait_for_leader_and_pop(nodes);
     let initial_leader_id = initial_leader.raft_state.read().unwrap().1;
     info!("initial_leader_id: {}", initial_leader_id);
 
     let success_count = Arc::new(AtomicU64::new(0));
     let error_count = Arc::new(AtomicU64::new(0));
 
+    let leader = Arc::new(Mutex::new(PersistVariants::Raft(initial_leader)));
     let mut handles = Vec::new();
     for _i in 0..3 {
-        let leader = Arc::clone(&initial_leader);
         let success_counter = Arc::clone(&success_count);
         let error_counter = Arc::clone(&error_count);
+
+        let leader = leader.clone();
 
         let handle = thread::spawn(move || {
             let (mut signer, handle) = create_signer_with_mock_conn();
@@ -336,7 +336,7 @@ fn leader_election_during_signing() {
                     break;
                 }
 
-                match crate::handle_single_request(&mut signer, &persist) {
+                match crate::handle_single_request(&mut signer, &leader) {
                     Ok(()) => {
                         if let Ok(response_bytes) = handle.response_receiver.try_recv() {
                             let response_msg = v0_38::privval::Message::decode_length_delimited(
@@ -373,12 +373,16 @@ fn leader_election_during_signing() {
         "Transferring leadership from {} to {}",
         initial_leader_id, transferee_id
     );
-    initial_leader.transfer_leadership(transferee_id).unwrap();
 
-    thread::sleep(Duration::from_millis(2000));
-    let new_leader = harness.wait_for_leader(Duration::from_secs(15));
-    assert!(new_leader.is_some(), "New leader should be elected");
-    let new_leader_id = new_leader.unwrap().raft_state.read().unwrap().1;
+    let initial_leader = unwrap_node(leader);
+    initial_leader.transfer_leadership(transferee_id).unwrap();
+    thread::sleep(Duration::from_millis(200)); // this sleep is load-bearing for this test
+
+    followers.push(initial_leader);
+    let nodes = followers;
+
+    let (new_leader_node, _) = wait_for_leader_and_pop(nodes);
+    let new_leader_id = new_leader_node.raft_state.read().unwrap().1;
     assert_ne!(
         new_leader_id, initial_leader_id,
         "Leadership should have changed"
@@ -407,25 +411,32 @@ fn leader_election_during_signing() {
 #[test]
 fn signing_old_blocks_after_state_advancement() {
     let harness = TestHarness::new(1);
-    let leader = harness.wait_for_leader(Duration::from_secs(5)).unwrap();
+    let nodes = harness.nodes;
+    let (leader_node, _) = wait_for_leader_and_pop(nodes);
+    let leader = Arc::new(Mutex::new(PersistVariants::Raft(leader_node)));
 
     let (mut signer, handle) = create_signer_with_mock_conn();
 
     let req_bytes = create_proposal_request_bytes(100, 0);
     handle.request_sender.send(req_bytes).unwrap();
-    harness.handle_request(&mut signer, &leader).unwrap();
+    handle_single_request(&mut signer, &leader).unwrap();
     handle.response_receiver.recv().unwrap(); // consume response
 
-    for height in 101..120 {
+    for height in 101..=120 {
         let req_bytes = create_proposal_request_bytes(height, 0);
         handle.request_sender.send(req_bytes).unwrap();
-        harness.handle_request(&mut signer, &leader).unwrap();
+        handle_single_request(&mut signer, &leader).unwrap();
         handle.response_receiver.recv().unwrap();
     }
 
+    assert_eq!(leader.lock().unwrap().state().height, 120);
+
     let old_req_bytes = create_proposal_request_bytes(50, 0);
     handle.request_sender.send(old_req_bytes).unwrap();
-    harness.handle_request(&mut signer, &leader).unwrap();
+    handle_single_request(&mut signer, &leader).unwrap();
+
+    // state does not go back
+    assert_eq!(leader.lock().unwrap().state().height, 120);
 
     let response_bytes = handle.response_receiver.recv().unwrap();
     let response_msg =
@@ -440,6 +451,7 @@ fn signing_old_blocks_after_state_advancement() {
     }
 }
 
+/*
 #[test]
 fn mixed_vote_types_with_state_transitions() {
     let harness = TestHarness::new(1);

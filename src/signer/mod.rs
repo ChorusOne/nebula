@@ -63,8 +63,8 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
             Request::SignVote(vote) => {
                 if !safeguards::should_sign_vote(&current_state, &vote) {
                     let response = V::create_error_vote_response(&format!(
-                        "Would double-sign vote at same height/round {}/{}",
-                        vote.height, vote.round
+                        "Would double-sign vote at same height/round/step {}/{}/{:?}",
+                        vote.height, vote.round, vote.step
                     ));
 
                     return Ok(Response::SignedVote((response, *current_state)));
