@@ -22,7 +22,7 @@ use cluster::SignerRaftNode;
 use config::{Config, PersistConfig, ProtocolVersionConfig};
 use connection::open_secret_connection;
 use log::{debug, error, info, warn};
-use persist::Persist;
+use persist::{Persist, PersistVariants};
 use signer::Signer;
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -49,29 +49,31 @@ fn main() -> Result<(), SignerError> {
     info!("Loading config from: {}", config_path);
     info!("Chain ID: {}", config.chain_id);
     info!("Protocol version: {:?}", config.version);
-    let state_persist: Box<dyn Persist + Send> = match &config.persist {
+    let state_persist: Arc<Mutex<PersistVariants>> = match &config.persist {
         PersistConfig::Raft { raft } => {
             info!("Node ID: {}", raft.node_id);
-            Box::new(SignerRaftNode::new(raft.clone()))
+            Arc::new(Mutex::new(PersistVariants::Raft(SignerRaftNode::new(
+                raft.clone(),
+            ))))
         }
         PersistConfig::Local { local } => {
             info!("Local persistence path: {:?}", local.path);
-            Box::new(persist::LocalState::new(&ConsensusData {
-                height: 0,
-                round: 0,
-                step: 0,
-            }))
+            Arc::new(Mutex::new(PersistVariants::Local(
+                persist::LocalState::new(&ConsensusData {
+                    height: 0,
+                    round: 0,
+                    step: 0,
+                }),
+            )))
         }
     };
 
-    let ls = Arc::new(Mutex::new(state_persist));
-
     loop {
         let result = match config.version {
-            ProtocolVersionConfig::V0_34 => run_leader::<VersionV0_34>(&config, &ls),
-            ProtocolVersionConfig::V0_37 => run_leader::<VersionV0_37>(&config, &ls),
-            ProtocolVersionConfig::V0_38 => run_leader::<VersionV0_38>(&config, &ls),
-            ProtocolVersionConfig::V1_0 => run_leader::<VersionV1_0>(&config, &ls),
+            ProtocolVersionConfig::V0_34 => run_leader::<VersionV0_34>(&config, &state_persist),
+            ProtocolVersionConfig::V0_37 => run_leader::<VersionV0_37>(&config, &state_persist),
+            ProtocolVersionConfig::V0_38 => run_leader::<VersionV0_38>(&config, &state_persist),
+            ProtocolVersionConfig::V1_0 => run_leader::<VersionV1_0>(&config, &state_persist),
         };
 
         match result {
@@ -102,7 +104,7 @@ fn wait_as_follower(raft_node: &Arc<SignerRaftNode>) {
 
 fn run_leader<V: ProtocolVersion + Send + 'static>(
     config: &Config,
-    persist: &Arc<Mutex<Box<dyn Persist + Send>>>,
+    persist: &Arc<Mutex<PersistVariants>>,
 ) -> Result<(), SignerError> {
     info!(
         "Running leader loop for {} connections",
@@ -138,7 +140,7 @@ fn handle_connection<V: ProtocolVersion + Send + 'static>(
     host: String,
     port: u16,
     config: Arc<Config>,
-    persist: Arc<Mutex<Box<dyn Persist + Send>>>,
+    persist: Arc<Mutex<PersistVariants>>,
 ) -> Result<(), SignerError> {
     let mut retry_count = 0;
     let identity_key = ed25519_consensus::SigningKey::new(rand_core::OsRng);
@@ -146,7 +148,6 @@ fn handle_connection<V: ProtocolVersion + Send + 'static>(
     let mut signer = create_signer::<V>(&host, port, &identity_key, &config)?;
 
     loop {
-        info!("host {host}:{port}");
         let response = handle_single_request(&mut signer, &persist);
         if let Err(ref e) = response {
             error!("Error handling request from {}:{} - {}", host, port, e);
@@ -162,11 +163,13 @@ fn handle_connection<V: ProtocolVersion + Send + 'static>(
 
 pub fn handle_single_request<T: SigningBackend, V: ProtocolVersion, C: Read + Write>(
     signer: &mut Signer<T, V, C>,
-    persist: &Arc<Mutex<Box<dyn Persist + Send>>>,
+    persist: &Arc<Mutex<PersistVariants>>,
 ) -> Result<(), SignerError> {
     let start = std::time::Instant::now();
     let request = signer.read_request()?;
-    info!("Received request {:?} after {:?}", start.elapsed(), request);
+
+    info!("Received request after {:?}", start.elapsed());
+    debug!("Request: {request:?}");
 
     let start = std::time::Instant::now();
     let mut guard = persist.lock().unwrap();
@@ -175,15 +178,16 @@ pub fn handle_single_request<T: SigningBackend, V: ProtocolVersion, C: Read + Wr
     info!("Processing request took: {:?}", start.elapsed());
 
     let start = std::time::Instant::now();
-    info!("persisting");
+    debug!("Persisting state");
     match response {
         protocol::Response::SignedProposal((_, new_state)) => guard.persist(&new_state).unwrap(),
         protocol::Response::SignedVote((_, new_state)) => guard.persist(&new_state).unwrap(),
         protocol::Response::PublicKey(_) => (),
         protocol::Response::Ping(_) => (),
     }
-    info!("persisted");
+    debug!("Persisted state");
 
+    debug!("Sending response to validator");
     signer.send_response(response)?;
     info!("Sending the response took: {:?}", start.elapsed());
     Ok(())

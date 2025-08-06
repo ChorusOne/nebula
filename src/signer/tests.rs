@@ -3,7 +3,7 @@ use crate::backend::Ed25519Signer;
 use crate::proto::v0_38;
 use crate::protocol::Request;
 use crate::signer::Signer;
-use crate::types::SignedMsgType;
+use crate::types::{ConsensusData, SignedMsgType};
 use crate::versions::VersionV0_38;
 use prost::Message;
 use std::time::Duration;
@@ -38,7 +38,12 @@ fn signer_with_mock_connection() {
     let request = signer.read_request().unwrap();
     assert!(matches!(request, Request::SignProposal(_)));
 
-    let response = signer.process_request(request).unwrap();
+    let state = ConsensusData {
+        step: 0,
+        height: 0,
+        round: 0,
+    };
+    let response = signer.process_request(&state, &request).unwrap();
 
     signer.send_response(response).unwrap();
 

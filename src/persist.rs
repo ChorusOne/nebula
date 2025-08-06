@@ -1,11 +1,20 @@
 use crate::cluster::SignerRaftNode;
 use crate::types::ConsensusData;
+use enum_dispatch::enum_dispatch;
 
 #[derive(Debug)]
 pub enum PersistError {
     InvalidState,
     CouldNotPersist,
 }
+
+#[enum_dispatch(Persist)]
+pub enum PersistVariants {
+    Raft(SignerRaftNode),
+    Local(LocalState),
+}
+
+#[enum_dispatch]
 pub trait Persist {
     fn persist(&mut self, state: &ConsensusData) -> Result<(), PersistError>;
     fn state(&self) -> Result<ConsensusData, PersistError>;
@@ -36,7 +45,7 @@ impl Persist for SignerRaftNode {
         if !self.is_leader() {
             return Err(PersistError::InvalidState);
         }
-        if let Err(e) = self.replicate_state(state) {
+        if let Err(_) = self.replicate_state(state) {
             return Err(PersistError::CouldNotPersist);
         }
         Ok(())

@@ -2,10 +2,7 @@ use std::cmp::Ordering;
 
 use log::info;
 
-use crate::{
-    protocol::Request,
-    types::{ConsensusData, Proposal, SignedMsgType, Vote},
-};
+use crate::types::{ConsensusData, Proposal, SignedMsgType, Vote};
 
 /*
 A signer should only sign a proposal p if any of the following lines are true:

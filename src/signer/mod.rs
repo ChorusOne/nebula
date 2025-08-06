@@ -40,9 +40,10 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
         let response = match request {
             Request::SignProposal(proposal) => {
                 if !safeguards::should_sign_proposal(&current_state, &proposal) {
-                    let response = V::create_error_prop_response(
-                        "Would double-sign proposal at same height/round/step",
-                    );
+                    let response = V::create_error_prop_response(&format!(
+                        "Would double-sign proposal at height/round/step {}/{}/{}",
+                        proposal.height, proposal.round, proposal.step as u8
+                    ));
 
                     return Ok(Response::SignedProposal((response, *current_state)));
                 }
@@ -61,9 +62,10 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
             }
             Request::SignVote(vote) => {
                 if !safeguards::should_sign_vote(&current_state, &vote) {
-                    let response = V::create_error_vote_response(
-                        "Would double-sign vote at same height/round",
-                    );
+                    let response = V::create_error_vote_response(&format!(
+                        "Would double-sign vote at same height/round {}/{}",
+                        vote.height, vote.round
+                    ));
 
                     return Ok(Response::SignedVote((response, *current_state)));
                 }
