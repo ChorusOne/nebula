@@ -56,7 +56,6 @@ impl ProtocolVersion for VersionV0_37 {
         _vote: &Vote,
         _signature: Vec<u8>,
         _ext_signature: Option<Vec<u8>>,
-        _error: Option<String>,
     ) -> Self::VoteResponse {
         todo!()
     }

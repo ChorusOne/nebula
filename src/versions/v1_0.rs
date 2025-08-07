@@ -201,7 +201,6 @@ impl ProtocolVersion for VersionV1_0 {
         vote: &Vote,
         signature: Vec<u8>,
         ext_signature: Option<Vec<u8>>,
-        error: Option<String>,
     ) -> Self::VoteResponse {
         v1::privval::SignedVoteResponse {
             vote: Some(crate::proto::v1::types::Vote {
@@ -219,10 +218,7 @@ impl ProtocolVersion for VersionV1_0 {
                 extension: vote.extension.clone().into(),
                 extension_signature: ext_signature.unwrap_or_default().into(),
             }),
-            error: error.map(|desc| v1::privval::RemoteSignerError {
-                code: 1,
-                description: desc,
-            }),
+            error: None,
         }
     }
 

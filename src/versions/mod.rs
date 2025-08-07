@@ -39,7 +39,6 @@ pub trait ProtocolVersion {
         vote: &Vote,
         signature: Vec<u8>,
         extension_signature: Option<Vec<u8>>,
-        error: Option<String>,
     ) -> Self::VoteResponse;
     fn create_pub_key_response(pub_key: &PublicKey) -> Self::PubKeyResponse;
     fn create_ping_response() -> Self::PingResponse;

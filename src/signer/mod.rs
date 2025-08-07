@@ -72,14 +72,13 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
                         hex::encode(&extension_signable_data)
                     );
                     debug!("Extension signature: {}", hex::encode(&ext_signature));
-                    let response =
-                        V::create_vote_response(&vote, signature, Some(ext_signature), None);
+                    let response = V::create_vote_response(&vote, signature, Some(ext_signature));
                     return Ok(Response::SignedVote(response));
                 }
                 info!("no vote ext this time");
                 debug!("Signature: {}", hex::encode(&signature));
                 debug!("Signable data: {}", hex::encode(&signable_data));
-                let response = V::create_vote_response(&vote, signature, None, None);
+                let response = V::create_vote_response(&vote, signature, None);
                 Ok(Response::SignedVote(response))
             }
         }
