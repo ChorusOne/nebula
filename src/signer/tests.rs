@@ -1,7 +1,7 @@
 use super::mock_connection::MockCometBFTConnection;
 use crate::backend::Ed25519Signer;
 use crate::proto::v0_38;
-use crate::protocol::Request;
+use crate::protocol::{Request, SignRequest};
 use crate::signer::Signer;
 use crate::types::{ConsensusData, SignedMsgType};
 use crate::versions::VersionV0_38;
@@ -36,7 +36,10 @@ fn signer_with_mock_connection() {
     handle.request_sender.send(req_bytes).unwrap();
 
     let request = signer.read_request().unwrap();
-    assert!(matches!(request, Request::SignProposal(_)));
+    assert!(matches!(
+        request,
+        Request::Signable(SignRequest::Proposal(_))
+    ));
 
     let state = ConsensusData {
         step: 0,

@@ -1,4 +1,4 @@
-use crate::SignerError;
+use crate::{SignerError, safeguards::ValidRequest};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -174,6 +174,23 @@ pub struct ConsensusData {
     pub height: i64,
     pub round: i64,
     pub step: u8,
+}
+
+impl From<&ValidRequest> for ConsensusData {
+    fn from(value: &ValidRequest) -> Self {
+        match value {
+            ValidRequest::Vote(v) => Self {
+                height: v.height,
+                round: v.round,
+                step: v.step as u8,
+            },
+            ValidRequest::Proposal(p) => Self {
+                height: p.height,
+                round: p.round,
+                step: p.step as u8,
+            },
+        }
+    }
 }
 
 impl std::fmt::Display for ConsensusData {

@@ -2,7 +2,7 @@ use super::ProtocolVersion;
 use crate::backend::PublicKey;
 use crate::error::SignerError;
 use crate::proto::v0_38;
-use crate::protocol::{Request, Response};
+use crate::protocol::{Request, Response, SignRequest};
 use crate::types::{BlockId, PartSetHeader, Proposal, SignedMsgType, Vote};
 use log::{info, trace};
 use prost::Message;
@@ -24,11 +24,17 @@ impl ProtocolVersion for VersionV0_38 {
             Some(v0_38::privval::message::Sum::SignVoteRequest(req)) => {
                 let vote = req.vote.ok_or(SignerError::InvalidData)?;
                 info!("parsed vote extension: {:?}", vote.extension);
-                Ok((Request::SignVote(vote.try_into()?), req.chain_id))
+                Ok((
+                    Request::Signable(SignRequest::Vote(vote.try_into()?)),
+                    req.chain_id,
+                ))
             }
             Some(v0_38::privval::message::Sum::SignProposalRequest(req)) => {
                 let proposal = req.proposal.ok_or(SignerError::InvalidData)?;
-                Ok((Request::SignProposal(proposal.try_into()?), req.chain_id))
+                Ok((
+                    Request::Signable(SignRequest::Proposal(proposal.try_into()?)),
+                    req.chain_id,
+                ))
             }
             Some(v0_38::privval::message::Sum::PubKeyRequest(req)) => {
                 Ok((Request::ShowPublicKey, req.chain_id))
@@ -50,10 +56,8 @@ impl ProtocolVersion for VersionV0_38 {
     ) -> Result<Vec<u8>, SignerError> {
         let mut buf = Vec::new();
         let msg = match response {
-            Response::SignedVote((resp, _)) => {
-                v0_38::privval::message::Sum::SignedVoteResponse(resp)
-            }
-            Response::SignedProposal((resp, _)) => {
+            Response::SignedVote(resp) => v0_38::privval::message::Sum::SignedVoteResponse(resp),
+            Response::SignedProposal(resp) => {
                 v0_38::privval::message::Sum::SignedProposalResponse(resp)
             }
             Response::Ping(resp) => v0_38::privval::message::Sum::PingResponse(resp),

@@ -2,7 +2,7 @@ use super::ProtocolVersion;
 use crate::backend::PublicKey;
 use crate::error::SignerError;
 use crate::proto::v1;
-use crate::protocol::{Request, Response};
+use crate::protocol::{Request, Response, SignRequest};
 use crate::types::{BlockId, PartSetHeader, Proposal, SignedMsgType, Vote};
 use log::trace;
 use prost::Message;
@@ -25,14 +25,16 @@ impl ProtocolVersion for VersionV1_0 {
             Some(v1::privval::message::Sum::SignVoteRequest(req)) => {
                 let vote = req.vote.ok_or(SignerError::InvalidData)?;
                 Ok((
-                    Request::SignVote(tendermint_vote_to_domain(vote)?),
+                    Request::Signable(SignRequest::Vote(tendermint_vote_to_domain(vote)?)),
                     req.chain_id,
                 ))
             }
             Some(v1::privval::message::Sum::SignProposalRequest(req)) => {
                 let proposal = req.proposal.ok_or(SignerError::InvalidData)?;
                 Ok((
-                    Request::SignProposal(tendermint_proposal_to_domain(proposal)?),
+                    Request::Signable(SignRequest::Proposal(tendermint_proposal_to_domain(
+                        proposal,
+                    )?)),
                     req.chain_id,
                 ))
             }
@@ -54,8 +56,8 @@ impl ProtocolVersion for VersionV1_0 {
     ) -> Result<Vec<u8>, SignerError> {
         let mut buf = Vec::new();
         let msg = match response {
-            Response::SignedVote((resp, _)) => v1::privval::message::Sum::SignedVoteResponse(resp),
-            Response::SignedProposal((resp, _)) => {
+            Response::SignedVote(resp) => v1::privval::message::Sum::SignedVoteResponse(resp),
+            Response::SignedProposal(resp) => {
                 v1::privval::message::Sum::SignedProposalResponse(resp)
             }
             Response::Ping(resp) => v1::privval::message::Sum::PingResponse(resp),

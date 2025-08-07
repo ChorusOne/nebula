@@ -1,8 +1,8 @@
-use crate::backend::SigningBackend;
+use crate::backend::{PublicKey, SigningBackend};
 use crate::error::SignerError;
 use crate::protocol::{Request, Response};
-use crate::safeguards;
-use crate::types::{BufferError, ConsensusData, SignedMsgType};
+use crate::safeguards::ValidRequest;
+use crate::types::{BufferError, SignedMsgType};
 use crate::versions::ProtocolVersion;
 use log::{debug, info};
 use prost::Message as _;
@@ -28,53 +28,28 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
         }
     }
 
-    // TODO: the signing and sending sig should be split further maybe?
-    pub fn process_request(
+    pub fn public_key(&self) -> Result<PublicKey, SignerError> {
+        self.signer.public_key()
+    }
+
+    pub fn sign(
         &mut self,
-        current_state: &ConsensusData,
-        request: &Request,
+        request: ValidRequest,
     ) -> Result<
         Response<V::ProposalResponse, V::VoteResponse, V::PubKeyResponse, V::PingResponse>,
         SignerError,
     > {
-        let response = match request {
-            Request::SignProposal(proposal) => {
-                if !safeguards::should_sign_proposal(&current_state, &proposal) {
-                    let response = V::create_error_prop_response(&format!(
-                        "Would double-sign proposal at height/round/step {}/{}/{}",
-                        proposal.height, proposal.round, proposal.step as u8
-                    ));
-
-                    return Ok(Response::SignedProposal((response, *current_state)));
-                }
-
+        match request {
+            ValidRequest::Proposal(proposal) => {
                 let signable_data = V::proposal_to_bytes(&proposal, &self.chain_id)?;
                 let signature = self.signer.sign(&signable_data).unwrap();
                 debug!("Signature: {}", hex::encode(&signature));
                 debug!("Signable data: {}", hex::encode(&signable_data));
 
                 let response = V::create_proposal_response(&proposal, signature);
-                let new_state = ConsensusData {
-                    height: proposal.height,
-                    round: proposal.round,
-                    step: proposal.step as u8,
-                };
-                Response::SignedProposal((response, new_state))
+                Ok(Response::SignedProposal(response))
             }
-            Request::SignVote(vote) => {
-                if !safeguards::should_sign_vote(&current_state, &vote) {
-                    let response = V::create_error_vote_response(&format!(
-                        "Would double-sign vote at same height/round/step {}/{}/{:?}",
-                        vote.height, vote.round, vote.step
-                    ));
-
-                    return Ok(Response::SignedVote((response, *current_state)));
-                }
-                let new_state = ConsensusData {
-                    height: vote.height,
-                    round: vote.round,
-                    step: vote.step.into(),
-                };
+            ValidRequest::Vote(vote) => {
                 // TODO: chain id should be parsed from the request, and compared to what we're expecting
                 // ^ no chain_id in the request. if we configure wrong chain_id in the config
                 // ^ actually it IS in the request and it IS in the canonical vote / proposal
@@ -101,22 +76,15 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
                     debug!("Extension signature: {}", hex::encode(&ext_signature));
                     let response =
                         V::create_vote_response(&vote, signature, Some(ext_signature), None);
-                    return Ok(Response::SignedVote((response, new_state)));
+                    return Ok(Response::SignedVote(response));
                 }
                 info!("no vote ext this time");
                 debug!("Signature: {}", hex::encode(&signature));
                 debug!("Signable data: {}", hex::encode(&signable_data));
                 let response = V::create_vote_response(&vote, signature, None, None);
-                Response::SignedVote((response, new_state))
+                Ok(Response::SignedVote(response))
             }
-            Request::ShowPublicKey => {
-                let public_key = self.signer.public_key().unwrap();
-                Response::PublicKey(V::create_pub_key_response(&public_key))
-            }
-            Request::Ping => Response::Ping(V::create_ping_response()),
-        };
-
-        Ok(response)
+        }
     }
 
     pub fn read_request(&mut self) -> Result<Request, SignerError> {
