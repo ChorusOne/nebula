@@ -228,7 +228,21 @@ fn signing_rejected_if_not_leader() {
         &mut signer,
         &Arc::new(Mutex::new(PersistVariants::Raft(follower_node))),
     )
-    .expect_err("Request must fail, handler is not leader");
+    .unwrap();
+
+    let response_bytes = handle.response_receiver.recv().unwrap();
+
+    let response_msg =
+        v0_38::privval::Message::decode_length_delimited(response_bytes.as_slice()).unwrap();
+
+    match response_msg.sum {
+        Some(v0_38::privval::message::Sum::SignedProposalResponse(res)) => {
+            assert!(res.error.is_some());
+            println!("{}", res.error.clone().unwrap().description);
+            assert!(res.error.unwrap().description.contains("Not the leader"));
+        }
+        _ => panic!("Wrong response type"),
+    }
 }
 
 #[test]
@@ -271,8 +285,19 @@ fn double_sign_prevention() {
     let (leader_node, _) = wait_for_leader_and_pop(nodes);
 
     let leader = Arc::new(Mutex::new(PersistVariants::Raft(leader_node)));
-    handle_single_request(&mut signer, &leader)
-        .expect_err("Request must fail, payload is sent twice");
+    handle_single_request(&mut signer, &leader).unwrap();
+    let response_bytes = handle.response_receiver.recv().unwrap();
+
+    let response_msg =
+        v0_38::privval::Message::decode_length_delimited(response_bytes.as_slice()).unwrap();
+
+    match response_msg.sum {
+        Some(v0_38::privval::message::Sum::SignedProposalResponse(res)) => {
+            assert!(res.error.is_some());
+            assert!(res.error.unwrap().description.contains("double-sign"));
+        }
+        _ => panic!("Wrong response type"),
+    }
 }
 
 #[test]
@@ -645,8 +670,23 @@ fn no_replicate_acks() {
     thread::sleep(Duration::from_millis(500));
 
     let leader = Arc::new(Mutex::new(PersistVariants::Raft(initial_leader)));
-    handle_single_request(&mut signer1, &leader)
-        .expect_err("Replication should fail without followers");
+    handle_single_request(&mut signer1, &leader).unwrap();
+
+    let response_bytes = handle1.response_receiver.recv().unwrap();
+
+    let response_msg =
+        v0_38::privval::Message::decode_length_delimited(response_bytes.as_slice()).unwrap();
+
+    match response_msg.sum {
+        Some(v0_38::privval::message::Sum::SignedProposalResponse(res)) => {
+            assert!(
+                res.error.is_some(),
+                "Replication should fail without followers"
+            );
+        }
+
+        _ => panic!("Expected SignedProposalResponse"),
+    }
 }
 
 #[test]

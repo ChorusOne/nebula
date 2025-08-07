@@ -2,7 +2,7 @@ use super::mock_connection::MockCometBFTConnection;
 use crate::backend::Ed25519Signer;
 use crate::proto::v0_38;
 use crate::protocol::{Request, SignRequest};
-use crate::signer::Signer;
+use crate::signer::{ProcessedRequest, Signer};
 use crate::types::{ConsensusData, SignedMsgType};
 use crate::versions::VersionV0_38;
 use prost::Message;
@@ -46,7 +46,12 @@ fn signer_with_mock_connection() {
         height: 0,
         round: 0,
     };
-    let (response, _new_consensus_state) = signer.process_request(&state, request).unwrap();
+    let processed_request = signer.process_request(&state, request);
+
+    let response = match processed_request {
+        ProcessedRequest::Valid { request, .. } => signer.sign(request).unwrap(),
+        _ => panic!("Expected a valid request"),
+    };
 
     signer.send_response(response).unwrap();
 

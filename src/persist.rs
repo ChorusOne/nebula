@@ -4,8 +4,8 @@ use enum_dispatch::enum_dispatch;
 
 #[derive(Debug)]
 pub enum PersistError {
-    InvalidState,
-    CouldNotPersist,
+    InvalidState(String),
+    CouldNotPersist(String),
 }
 
 #[enum_dispatch(Persist)]
@@ -43,10 +43,10 @@ impl Persist for LocalState {
 impl Persist for SignerRaftNode {
     fn persist(&mut self, state: &ConsensusData) -> Result<(), PersistError> {
         if !self.is_leader() {
-            return Err(PersistError::InvalidState);
+            return Err(PersistError::InvalidState("Not the leader".into()));
         }
-        if let Err(_) = self.replicate_state(state) {
-            return Err(PersistError::CouldNotPersist);
+        if let Err(e) = self.replicate_state(state) {
+            return Err(PersistError::CouldNotPersist(e.to_string()));
         }
         Ok(())
     }

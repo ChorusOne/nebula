@@ -18,6 +18,8 @@ use crate::backend::{
 };
 use crate::config::SigningMode;
 use crate::error::SignerError;
+use crate::protocol::Response;
+use crate::signer::ProcessedRequest;
 use cluster::SignerRaftNode;
 use config::{Config, PersistConfig, ProtocolVersionConfig};
 use connection::open_secret_connection;
@@ -174,11 +176,35 @@ pub fn handle_single_request<T: SigningBackend, V: ProtocolVersion, C: Read + Wr
     let mut guard = persist.lock().unwrap();
     let consensus_state = guard.state();
 
-    let (response, new_consensus_state) = signer.process_request(&consensus_state, request)?;
-    // TODO: send_response should take something that only `persist` can make
+    let processed_request = signer.process_request(&consensus_state, request);
+
+    let response = match processed_request {
+        ProcessedRequest::Valid { request, new_state } => {
+            let response = signer.sign(request)?;
+            if let Err(e) = guard.persist(&new_state) {
+                // TODO: this should not be Valid but Prop / Vote
+                Response::SignedProposal(V::create_error_prop_response(&format!(
+                    "Cannot persist new consensus state: {e:?}"
+                )))
+            } else {
+                response
+            }
+        }
+        ProcessedRequest::ErrorProposal { msg } => {
+            Response::SignedProposal(V::create_error_prop_response(&msg))
+        }
+        ProcessedRequest::ErrorVote { msg } => {
+            Response::SignedVote(V::create_error_vote_response(&msg))
+        }
+        ProcessedRequest::ShowPublicKey => {
+            let public_key = signer.public_key()?;
+            Response::PublicKey(V::create_pub_key_response(&public_key))
+        }
+        ProcessedRequest::Ping => Response::Ping(V::create_ping_response()),
+    };
+
     info!("Processing request took: {:?}", start.elapsed());
     let start = std::time::Instant::now();
-    guard.persist(&new_consensus_state)?;
 
     debug!("Sending response to validator");
     signer.send_response(response)?;

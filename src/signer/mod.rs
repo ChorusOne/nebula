@@ -1,3 +1,4 @@
+use crate::backend::PublicKey;
 use crate::backend::SigningBackend;
 use crate::error::SignerError;
 use crate::protocol::{Request, Response};
@@ -10,6 +11,21 @@ use log::{debug, info};
 use prost::Message as _;
 use std::io::{Read, Write};
 use std::marker::PhantomData;
+
+pub enum ProcessedRequest {
+    Valid {
+        request: ValidRequest,
+        new_state: ConsensusData,
+    },
+    ErrorProposal {
+        msg: String,
+    },
+    ErrorVote {
+        msg: String,
+    },
+    ShowPublicKey,
+    Ping,
+}
 
 pub struct Signer<T: SigningBackend, V: ProtocolVersion, C: Read + Write> {
     signer: T,
@@ -28,6 +44,10 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
             _version: PhantomData,
             read_buffer: Vec::new(),
         }
+    }
+
+    pub fn public_key(&self) -> Result<PublicKey, SignerError> {
+        self.signer.public_key()
     }
 
     pub fn sign(
@@ -91,53 +111,40 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
     }
 
     pub fn process_request(
-        &mut self,
+        &self,
         consensus_state: &ConsensusData,
         request: Request,
-    ) -> Result<
-        (
-            Response<V::ProposalResponse, V::VoteResponse, V::PubKeyResponse, V::PingResponse>,
-            ConsensusData,
-        ),
-        SignerError,
-    > {
-        Ok(match request {
+    ) -> ProcessedRequest {
+        match request {
             Request::Signable(signable) => {
-                let checked = safeguards::should_sign(&consensus_state, signable);
+                let checked = safeguards::should_sign(consensus_state, signable);
                 match checked {
-                    CheckedRequest::DoubleSignVote(req) => {
-                        let response = V::create_error_vote_response(&format!(
+                    CheckedRequest::DoubleSignVote(req) => ProcessedRequest::ErrorVote {
+                        msg: format!(
                             "Would double-sign vote at height/round/step {}/{}/{}",
                             req.height, req.round, req.step as u8
-                        ));
-                        (Response::SignedVote(response), consensus_state.clone())
-                    }
-                    CheckedRequest::DoubleSignProposal(req) => {
-                        let response = V::create_error_prop_response(&format!(
+                        ),
+                    },
+                    CheckedRequest::DoubleSignProposal(req) => ProcessedRequest::ErrorProposal {
+                        msg: format!(
                             "Would double-sign proposal at height/round/step {}/{}/{}",
                             req.height, req.round, req.step as u8
-                        ));
-                        (Response::SignedProposal(response), consensus_state.clone())
-                    }
+                        ),
+                    },
                     CheckedRequest::ValidRequest(v) => {
-                        let cd = ConsensusData::from(&v);
-                        (self.sign(v)?, cd)
+                        let new_state = ConsensusData::from(&v);
+                        ProcessedRequest::Valid {
+                            request: v,
+                            new_state,
+                        }
                     }
                 }
             }
-            Request::ShowPublicKey => {
-                let public_key = self.signer.public_key().unwrap();
-                (
-                    Response::PublicKey(V::create_pub_key_response(&public_key)),
-                    consensus_state.clone(),
-                )
-            }
-            Request::Ping => (
-                Response::Ping(V::create_ping_response()),
-                consensus_state.clone(),
-            ),
-        })
+            Request::ShowPublicKey => ProcessedRequest::ShowPublicKey,
+            Request::Ping => ProcessedRequest::Ping,
+        }
     }
+
     // lifetime here is probably not needed. we'd need it if we returned something referencing the buffer
     fn try_read_complete_message(&self, buffer: &[u8]) -> Result<usize, BufferError> {
         match V::Message::decode_length_delimited(buffer) {
