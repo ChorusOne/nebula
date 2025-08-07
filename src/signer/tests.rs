@@ -46,7 +46,7 @@ fn signer_with_mock_connection() {
         height: 0,
         round: 0,
     };
-    let response = signer.process_request(&state, &request).unwrap();
+    let (response, _new_consensus_state) = signer.process_request(&state, request).unwrap();
 
     signer.send_response(response).unwrap();
 

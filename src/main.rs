@@ -23,8 +23,6 @@ use config::{Config, PersistConfig, ProtocolVersionConfig};
 use connection::open_secret_connection;
 use log::{debug, error, info, warn};
 use persist::{Persist, PersistVariants};
-use protocol::{Request, Response};
-use safeguards::CheckedRequest;
 use signer::Signer;
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -175,44 +173,12 @@ pub fn handle_single_request<T: SigningBackend, V: ProtocolVersion, C: Read + Wr
     let start = std::time::Instant::now();
     let mut guard = persist.lock().unwrap();
     let consensus_state = guard.state();
-    let response = match request {
-        Request::Signable(signable) => {
-            let checked = safeguards::should_sign(&consensus_state, signable);
-            match checked {
-                CheckedRequest::DoubleSignVote(req) => {
-                    let response = V::create_error_vote_response(&format!(
-                        "Would double-sign vote at height/round/step {}/{}/{}",
-                        req.height, req.round, req.step as u8
-                    ));
-                    Response::SignedVote(response)
-                }
-                CheckedRequest::DoubleSignProposal(req) => {
-                    let response = V::create_error_prop_response(&format!(
-                        "Would double-sign proposal at height/round/step {}/{}/{}",
-                        req.height, req.round, req.step as u8
-                    ));
-                    Response::SignedProposal(response)
-                }
-                CheckedRequest::ValidRequest(v) => {
-                    // i don't like having all this logic here, because it can't
-                    // be used in the tests (signer.process_request)
-                    // but we need to hook the persistence here
-                    // OR return { ValidRequest, Response::ShowPublicKey, Response::Ping }
-                    guard.persist(&ConsensusData::from(&v))?;
-                    let response = signer.sign(v)?;
-                    response
-                }
-            }
-        }
-        Request::ShowPublicKey => {
-            let public_key = signer.public_key().unwrap();
-            Response::PublicKey(V::create_pub_key_response(&public_key))
-        }
-        Request::Ping => Response::Ping(V::create_ping_response()),
-    };
 
+    let (response, new_consensus_state) = signer.process_request(&consensus_state, request)?;
+    // TODO: send_response should take something that only `persist` can make
     info!("Processing request took: {:?}", start.elapsed());
     let start = std::time::Instant::now();
+    guard.persist(&new_consensus_state)?;
 
     debug!("Sending response to validator");
     signer.send_response(response)?;
