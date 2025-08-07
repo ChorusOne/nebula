@@ -47,6 +47,7 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
 
                     return Ok(Response::SignedProposal((response, *current_state)));
                 }
+
                 let signable_data = V::proposal_to_bytes(&proposal, &self.chain_id)?;
                 let signature = self.signer.sign(&signable_data).unwrap();
                 debug!("Signature: {}", hex::encode(&signature));
@@ -56,7 +57,7 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
                 let new_state = ConsensusData {
                     height: proposal.height,
                     round: proposal.round,
-                    step: SignedMsgType::Proposal as u8,
+                    step: proposal.step as u8,
                 };
                 Response::SignedProposal((response, new_state))
             }
@@ -98,23 +99,19 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
                         hex::encode(&extension_signable_data)
                     );
                     debug!("Extension signature: {}", hex::encode(&ext_signature));
-                    let response = V::create_vote_response(
-                        Some(vote.clone()),
-                        signature,
-                        Some(ext_signature),
-                        None,
-                    );
+                    let response =
+                        V::create_vote_response(&vote, signature, Some(ext_signature), None);
                     return Ok(Response::SignedVote((response, new_state)));
                 }
                 info!("no vote ext this time");
                 debug!("Signature: {}", hex::encode(&signature));
                 debug!("Signable data: {}", hex::encode(&signable_data));
-                let response = V::create_vote_response(Some(vote.clone()), signature, None, None);
+                let response = V::create_vote_response(&vote, signature, None, None);
                 Response::SignedVote((response, new_state))
             }
             Request::ShowPublicKey => {
                 let public_key = self.signer.public_key().unwrap();
-                Response::PublicKey(V::create_pub_key_response(public_key))
+                Response::PublicKey(V::create_pub_key_response(&public_key))
             }
             Request::Ping => Response::Ping(V::create_ping_response()),
         };

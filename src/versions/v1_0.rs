@@ -196,25 +196,25 @@ impl ProtocolVersion for VersionV1_0 {
     }
 
     fn create_vote_response(
-        vote: Option<Vote>,
+        vote: &Vote,
         signature: Vec<u8>,
         ext_signature: Option<Vec<u8>>,
         error: Option<String>,
     ) -> Self::VoteResponse {
         v1::privval::SignedVoteResponse {
-            vote: vote.map(|vote| crate::proto::v1::types::Vote {
+            vote: Some(crate::proto::v1::types::Vote {
                 r#type: vote.step.into(),
                 height: vote.height,
                 round: vote.round as i32,
-                block_id: vote.block_id.map(|id| id.into()),
+                block_id: vote.block_id.clone().map(|id| id.into()),
                 timestamp: vote.timestamp.map(|t| prost_types::Timestamp {
                     seconds: t / 1_000_000_000,
                     nanos: (t % 1_000_000_000) as i32,
                 }),
-                validator_address: vote.validator_address.into(),
+                validator_address: vote.validator_address.clone().into(),
                 validator_index: vote.validator_index,
                 signature: signature.into(),
-                extension: vote.extension.into(),
+                extension: vote.extension.clone().into(),
                 extension_signature: ext_signature.unwrap_or_default().into(),
             }),
             error: error.map(|desc| v1::privval::RemoteSignerError {
@@ -224,11 +224,11 @@ impl ProtocolVersion for VersionV1_0 {
         }
     }
 
-    fn create_pub_key_response(pub_key: PublicKey) -> Self::PubKeyResponse {
+    fn create_pub_key_response(pub_key: &PublicKey) -> Self::PubKeyResponse {
         v1::privval::PubKeyResponse {
             error: None,
-            pub_key_bytes: pub_key.bytes.into(),
-            pub_key_type: pub_key.key_type.into(),
+            pub_key_bytes: pub_key.bytes.clone().into(),
+            pub_key_type: pub_key.key_type.clone().into(),
         }
     }
 

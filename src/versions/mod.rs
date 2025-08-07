@@ -36,11 +36,11 @@ pub trait ProtocolVersion {
     fn create_error_prop_response(error: &str) -> Self::ProposalResponse;
     fn create_error_vote_response(error: &str) -> Self::VoteResponse;
     fn create_vote_response(
-        vote: Option<Vote>,
+        vote: &Vote,
         signature: Vec<u8>,
         extension_signature: Option<Vec<u8>>,
         error: Option<String>,
     ) -> Self::VoteResponse;
-    fn create_pub_key_response(pub_key: PublicKey) -> Self::PubKeyResponse;
+    fn create_pub_key_response(pub_key: &PublicKey) -> Self::PubKeyResponse;
     fn create_ping_response() -> Self::PingResponse;
 }

@@ -53,7 +53,7 @@ impl ProtocolVersion for VersionV0_37 {
     }
 
     fn create_vote_response(
-        _vote: Option<Vote>,
+        _vote: &Vote,
         _signature: Vec<u8>,
         _ext_signature: Option<Vec<u8>>,
         _error: Option<String>,
@@ -61,7 +61,7 @@ impl ProtocolVersion for VersionV0_37 {
         todo!()
     }
 
-    fn create_pub_key_response(_pub_key: PublicKey) -> Self::PubKeyResponse {
+    fn create_pub_key_response(_pub_key: &PublicKey) -> Self::PubKeyResponse {
         todo!()
     }
 
