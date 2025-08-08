@@ -1,7 +1,6 @@
 use crate::backend::PublicKey;
-use crate::protocol::{Request, Response};
-use crate::safeguards::ValidRequest;
-use crate::types::{Proposal, Vote};
+use crate::protocol::{Request, Response, ValidRequest};
+use crate::types::{ConsensusData, Proposal, Vote};
 
 pub mod v0_34;
 pub mod v0_37;
@@ -34,8 +33,8 @@ pub trait ProtocolVersion {
     fn vote_to_bytes(vote: &Vote, chain_id: &str) -> Result<Vec<u8>, SignerError>;
     fn vote_extension_to_bytes(vote: &Vote, chain_id: &str) -> Result<Vec<u8>, SignerError>;
     fn create_proposal_response(proposal: &Proposal, signature: Vec<u8>) -> Self::ProposalResponse;
-    fn create_error_prop_response(error: &str) -> Self::ProposalResponse;
-    fn create_error_vote_response(error: &str) -> Self::VoteResponse;
+    fn create_double_sign_prop_response(cd: &ConsensusData) -> Self::ProposalResponse;
+    fn create_double_sign_vote_response(cd: &ConsensusData) -> Self::VoteResponse;
     fn create_vote_response(
         vote: &Vote,
         signature: Vec<u8>,
@@ -47,12 +46,13 @@ pub trait ProtocolVersion {
 
 pub fn generate_error_response<V: ProtocolVersion>(
     r: &ValidRequest,
-    message: &str,
+    _message: &str,
 ) -> Response<V::ProposalResponse, V::VoteResponse, V::PubKeyResponse, V::PingResponse> {
+    let cd = ConsensusData::from(r);
     match r {
         ValidRequest::Proposal(_) => {
-            Response::SignedProposal(V::create_error_prop_response(message))
+            Response::SignedProposal(V::create_double_sign_prop_response(&cd))
         }
-        ValidRequest::Vote(_) => Response::SignedVote(V::create_error_vote_response(message)),
+        ValidRequest::Vote(_) => Response::SignedVote(V::create_double_sign_vote_response(&cd)),
     }
 }

@@ -1,4 +1,4 @@
-use crate::{SignerError, safeguards::ValidRequest};
+use crate::{SignerError, protocol::ValidRequest};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 

@@ -3,7 +3,7 @@ use crate::backend::PublicKey;
 use crate::error::SignerError;
 use crate::proto::v0_38;
 use crate::protocol::{Request, Response, SignRequest};
-use crate::types::{BlockId, PartSetHeader, Proposal, SignedMsgType, Vote};
+use crate::types::{BlockId, ConsensusData, PartSetHeader, Proposal, SignedMsgType, Vote};
 use log::{info, trace};
 use prost::Message;
 
@@ -152,21 +152,21 @@ impl ProtocolVersion for VersionV0_38 {
         Ok(bytes)
     }
 
-    fn create_error_vote_response(error: &str) -> Self::VoteResponse {
+    fn create_double_sign_vote_response(cd: &ConsensusData) -> Self::VoteResponse {
         v0_38::privval::SignedVoteResponse {
             vote: None,
             error: Some(v0_38::privval::RemoteSignerError {
                 code: 1,
-                description: error.to_string(),
+                description: format!("Would double-sign vote at height/round/step {}/{}/{}", cd.height, cd.round, cd.step),
             }),
         }
     }
-    fn create_error_prop_response(error: &str) -> Self::ProposalResponse {
+    fn create_double_sign_prop_response(cd: &ConsensusData) -> Self::ProposalResponse {
         v0_38::privval::SignedProposalResponse {
             proposal: None,
             error: Some(v0_38::privval::RemoteSignerError {
                 code: 1,
-                description: error.to_string(),
+                description: format!("Would double-sign proposal at height/round/step {}/{}/{}", cd.height, cd.round, cd.step),
             }),
         }
     }

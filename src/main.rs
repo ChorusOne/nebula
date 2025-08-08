@@ -6,7 +6,6 @@ mod error;
 mod persist;
 mod proto;
 mod protocol;
-mod safeguards;
 mod signer;
 mod types;
 mod versions;
@@ -19,12 +18,12 @@ use crate::backend::{
 use crate::config::SigningMode;
 use crate::error::SignerError;
 use crate::protocol::Response;
-use crate::signer::ProcessedRequest;
 use cluster::SignerRaftNode;
 use config::{Config, PersistConfig, ProtocolVersionConfig};
 use connection::open_secret_connection;
 use log::{debug, error, info, warn};
 use persist::{Persist, PersistVariants};
+use protocol::CheckedRequest;
 use signer::Signer;
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -178,32 +177,34 @@ pub fn handle_single_request<T: SigningBackend, V: ProtocolVersion, C: Read + Wr
     let mut guard = persist.lock().unwrap();
     let consensus_state = guard.state();
 
-    let processed_request = signer.process_request(&consensus_state, request);
+    let response = match request {
+        protocol::Request::Signable(s) => match s.check(&consensus_state) {
+            CheckedRequest::ValidRequest {
+                request,
+                cd: new_state,
+            } => {
+                let err_response =
+                    generate_error_response::<V>(&request, "Cannot persist new consensus state");
 
-    let response = match processed_request {
-        ProcessedRequest::Valid { request, new_state } => {
-            let err_response =
-                generate_error_response::<V>(&request, "Cannot persist new consensus state");
-
-            let response = signer.sign(request)?;
-            if let Err(e) = guard.persist(&new_state) {
-                error!("Could not persist state: {e:?}");
-                err_response
-            } else {
-                response
+                if let Err(e) = guard.persist(&new_state) {
+                    error!("Could not persist state: {e:?}");
+                    err_response
+                } else {
+                    signer.sign(request)?
+                }
             }
-        }
-        ProcessedRequest::ErrorProposal { msg } => {
-            Response::SignedProposal(V::create_error_prop_response(&msg))
-        }
-        ProcessedRequest::ErrorVote { msg } => {
-            Response::SignedVote(V::create_error_vote_response(&msg))
-        }
-        ProcessedRequest::ShowPublicKey => {
+            CheckedRequest::DoubleSignProposal(cd) => {
+                Response::SignedProposal(V::create_double_sign_prop_response(&cd))
+            }
+            CheckedRequest::DoubleSignVote(cd) => {
+                Response::SignedVote(V::create_double_sign_vote_response(&cd))
+            }
+        },
+        protocol::Request::ShowPublicKey => {
             let public_key = signer.public_key()?;
             Response::PublicKey(V::create_pub_key_response(&public_key))
         }
-        ProcessedRequest::Ping => Response::Ping(V::create_ping_response()),
+        protocol::Request::Ping => Response::Ping(V::create_ping_response()),
     };
 
     info!("Processing request took: {:?}", start.elapsed());

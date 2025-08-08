@@ -3,7 +3,7 @@ use crate::error::SignerError;
 use super::ProtocolVersion;
 use crate::backend::PublicKey;
 use crate::protocol::{Request, Response};
-use crate::types::{Proposal, Vote};
+use crate::types::{ConsensusData, Proposal, Vote};
 
 pub struct VersionV0_37;
 
@@ -37,11 +37,11 @@ impl ProtocolVersion for VersionV0_37 {
         todo!("0.37")
     }
 
-    fn create_error_vote_response(_error: &str) -> Self::VoteResponse {
+    fn create_double_sign_vote_response(_cd: &ConsensusData) -> Self::VoteResponse {
         todo!()
     }
 
-    fn create_error_prop_response(_error: &str) -> Self::ProposalResponse {
+    fn create_double_sign_prop_response(_cd: &ConsensusData) -> Self::ProposalResponse {
         todo!()
     }
 

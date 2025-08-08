@@ -1,31 +1,13 @@
 use crate::backend::PublicKey;
 use crate::backend::SigningBackend;
 use crate::error::SignerError;
-use crate::protocol::{Request, Response};
-use crate::safeguards;
-use crate::safeguards::CheckedRequest;
-use crate::safeguards::ValidRequest;
-use crate::types::{BufferError, ConsensusData, SignedMsgType};
+use crate::protocol::{Request, Response, ValidRequest};
+use crate::types::{BufferError, SignedMsgType};
 use crate::versions::ProtocolVersion;
 use log::{debug, info};
 use prost::Message as _;
 use std::io::{Read, Write};
 use std::marker::PhantomData;
-
-pub enum ProcessedRequest {
-    Valid {
-        request: ValidRequest,
-        new_state: ConsensusData,
-    },
-    ErrorProposal {
-        msg: String,
-    },
-    ErrorVote {
-        msg: String,
-    },
-    ShowPublicKey,
-    Ping,
-}
 
 pub struct Signer<T: SigningBackend, V: ProtocolVersion, C: Read + Write> {
     signer: T,
@@ -108,41 +90,6 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
         let msg_bytes = self.read_complete_message()?;
         let (request, _chain_id) = V::parse_request(msg_bytes)?;
         Ok(request)
-    }
-
-    pub fn process_request(
-        &self,
-        consensus_state: &ConsensusData,
-        request: Request,
-    ) -> ProcessedRequest {
-        match request {
-            Request::Signable(signable) => {
-                let checked = safeguards::should_sign(consensus_state, signable);
-                match checked {
-                    CheckedRequest::DoubleSignVote(req) => ProcessedRequest::ErrorVote {
-                        msg: format!(
-                            "Would double-sign vote at height/round/step {}/{}/{}",
-                            req.height, req.round, req.step as u8
-                        ),
-                    },
-                    CheckedRequest::DoubleSignProposal(req) => ProcessedRequest::ErrorProposal {
-                        msg: format!(
-                            "Would double-sign proposal at height/round/step {}/{}/{}",
-                            req.height, req.round, req.step as u8
-                        ),
-                    },
-                    CheckedRequest::ValidRequest(v) => {
-                        let new_state = ConsensusData::from(&v);
-                        ProcessedRequest::Valid {
-                            request: v,
-                            new_state,
-                        }
-                    }
-                }
-            }
-            Request::ShowPublicKey => ProcessedRequest::ShowPublicKey,
-            Request::Ping => ProcessedRequest::Ping,
-        }
     }
 
     // lifetime here is probably not needed. we'd need it if we returned something referencing the buffer
