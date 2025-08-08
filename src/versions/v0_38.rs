@@ -2,7 +2,7 @@ use super::ProtocolVersion;
 use crate::backend::PublicKey;
 use crate::error::SignerError;
 use crate::proto::v0_38;
-use crate::protocol::{Request, Response, SignRequest};
+use crate::protocol::{Request, Response};
 use crate::types::{BlockId, ConsensusData, PartSetHeader, Proposal, SignedMsgType, Vote};
 use log::{info, trace};
 use prost::Message;
@@ -25,14 +25,14 @@ impl ProtocolVersion for VersionV0_38 {
                 let vote = req.vote.ok_or(SignerError::InvalidData)?;
                 info!("parsed vote extension: {:?}", vote.extension);
                 Ok((
-                    Request::Signable(SignRequest::Vote(vote.try_into()?)),
+                    Request::Vote(vote.try_into()?),
                     req.chain_id,
                 ))
             }
             Some(v0_38::privval::message::Sum::SignProposalRequest(req)) => {
                 let proposal = req.proposal.ok_or(SignerError::InvalidData)?;
                 Ok((
-                    Request::Signable(SignRequest::Proposal(proposal.try_into()?)),
+                    Request::Proposal(proposal.try_into()?),
                     req.chain_id,
                 ))
             }

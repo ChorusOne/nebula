@@ -1,6 +1,7 @@
 use crate::backend::PublicKey;
 use crate::backend::SigningBackend;
 use crate::error::SignerError;
+use crate::persist::PersistedRequest;
 use crate::protocol::{Request, Response, ValidRequest};
 use crate::types::{BufferError, SignedMsgType};
 use crate::versions::ProtocolVersion;
@@ -34,12 +35,12 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
 
     pub fn sign(
         &mut self,
-        request: ValidRequest,
+        request: PersistedRequest,
     ) -> Result<
         Response<V::ProposalResponse, V::VoteResponse, V::PubKeyResponse, V::PingResponse>,
         SignerError,
     > {
-        match request {
+        match request.0 {
             ValidRequest::Proposal(proposal) => {
                 let signable_data = V::proposal_to_bytes(&proposal, &self.chain_id)?;
                 let signature = self.signer.sign(&signable_data).unwrap();

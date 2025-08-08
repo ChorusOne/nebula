@@ -163,10 +163,7 @@ fn handle_connection<V: ProtocolVersion + Send + 'static>(
 }
 
 enum RequestProcessingAction<V: ProtocolVersion> {
-    PersistAndSign {
-        request: ValidRequest,
-        new_state: ConsensusData,
-    },
+    PersistAndSign { request: ValidRequest },
     ReplyWith(Response<V::ProposalResponse, V::VoteResponse, V::PubKeyResponse, V::PingResponse>),
     ShowPublicKey,
 }
@@ -177,10 +174,9 @@ fn process_request<T: SigningBackend, V: ProtocolVersion>(
 ) -> RequestProcessingAction<V> {
     match request {
         Request::Proposal(proposal) => match proposal.check(consensus_state) {
-            CheckedRequest::ValidRequest {
-                request,
-                cd: new_state,
-            } => RequestProcessingAction::PersistAndSign { request, new_state },
+            CheckedRequest::ValidRequest(request) => {
+                RequestProcessingAction::PersistAndSign { request }
+            }
             CheckedRequest::DoubleSignProposal(cd) => RequestProcessingAction::ReplyWith(
                 Response::SignedProposal(V::create_double_sign_prop_response(&cd)),
             ),
@@ -189,10 +185,9 @@ fn process_request<T: SigningBackend, V: ProtocolVersion>(
             ),
         },
         Request::Vote(vote) => match vote.check(consensus_state) {
-            CheckedRequest::ValidRequest {
-                request,
-                cd: new_state,
-            } => RequestProcessingAction::PersistAndSign { request, new_state },
+            CheckedRequest::ValidRequest(request) => {
+                RequestProcessingAction::PersistAndSign { request }
+            }
             CheckedRequest::DoubleSignProposal(cd) => RequestProcessingAction::ReplyWith(
                 Response::SignedProposal(V::create_double_sign_prop_response(&cd)),
             ),
@@ -222,15 +217,13 @@ pub fn handle_single_request<T: SigningBackend, V: ProtocolVersion, C: Read + Wr
 
     let action = process_request::<T, V>(request, &consensus_state);
     let response = match action {
-        RequestProcessingAction::PersistAndSign { request, new_state } => {
-            if let Err(e) = guard.persist(&new_state) {
+        RequestProcessingAction::PersistAndSign { request } => match guard.persist(request) {
+            Err(e) => {
                 error!("Could not persist state: {e:?}");
                 V::create_error_response(&format!("Cannot persist new consensus state: {e:?}"))
-            } else {
-                // TODO: signer should only be able to sign with a PersistedValue or similar
-                signer.sign(request)?
             }
-        }
+            Ok(persisted) => signer.sign(persisted)?,
+        },
         RequestProcessingAction::ReplyWith(response) => response,
         RequestProcessingAction::ShowPublicKey => {
             let public_key = signer.public_key()?;

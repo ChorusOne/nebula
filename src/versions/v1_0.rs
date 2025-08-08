@@ -2,7 +2,7 @@ use super::ProtocolVersion;
 use crate::backend::PublicKey;
 use crate::error::SignerError;
 use crate::proto::v1;
-use crate::protocol::{Request, Response, SignRequest};
+use crate::protocol::{Request, Response};
 use crate::types::{BlockId, ConsensusData, PartSetHeader, Proposal, SignedMsgType, Vote};
 use log::trace;
 use prost::Message;
@@ -25,16 +25,16 @@ impl ProtocolVersion for VersionV1_0 {
             Some(v1::privval::message::Sum::SignVoteRequest(req)) => {
                 let vote = req.vote.ok_or(SignerError::InvalidData)?;
                 Ok((
-                    Request::Signable(SignRequest::Vote(tendermint_vote_to_domain(vote)?)),
+                    Request::Vote(tendermint_vote_to_domain(vote)?),
                     req.chain_id,
                 ))
             }
             Some(v1::privval::message::Sum::SignProposalRequest(req)) => {
                 let proposal = req.proposal.ok_or(SignerError::InvalidData)?;
                 Ok((
-                    Request::Signable(SignRequest::Proposal(tendermint_proposal_to_domain(
+                    Request::Proposal(tendermint_proposal_to_domain(
                         proposal,
-                    )?)),
+                    )?),
                     req.chain_id,
                 ))
             }

@@ -6,11 +6,6 @@ use std::cmp::Ordering;
 pub enum Request {
     ShowPublicKey,
     Ping,
-    Signable(SignRequest),
-}
-
-#[derive(Debug)]
-pub enum SignRequest {
     Proposal(Proposal),
     Vote(Vote),
 }
@@ -18,10 +13,7 @@ pub enum SignRequest {
 pub enum CheckedRequest {
     DoubleSignVote(ConsensusData),
     DoubleSignProposal(ConsensusData),
-    ValidRequest {
-        request: ValidRequest,
-        cd: ConsensusData,
-    },
+    ValidRequest(ValidRequest),
 }
 
 pub enum ValidRequest {
@@ -38,39 +30,31 @@ pub enum Response<P, V, K, G> {
     Ping(G),
 }
 
-impl SignRequest {
+impl Vote {
     pub fn check(self, state: &ConsensusData) -> CheckedRequest {
-        match self {
-            SignRequest::Vote(vote) => {
-                let req_state = ConsensusData {
-                    height: vote.height,
-                    round: vote.round,
-                    step: vote.step as u8,
-                };
-                if should_sign_vote(state, &vote) {
-                    CheckedRequest::ValidRequest {
-                        request: ValidRequest::Vote(vote),
-                        cd: req_state,
-                    }
-                } else {
-                    CheckedRequest::DoubleSignVote(req_state)
-                }
-            }
-            SignRequest::Proposal(proposal) => {
-                let req_state = ConsensusData {
-                    height: proposal.height,
-                    round: proposal.round,
-                    step: proposal.step as u8,
-                };
-                if should_sign_proposal(state, &proposal) {
-                    CheckedRequest::ValidRequest {
-                        request: ValidRequest::Proposal(proposal),
-                        cd: req_state,
-                    }
-                } else {
-                    CheckedRequest::DoubleSignProposal(req_state)
-                }
-            }
+        let req_state = ConsensusData {
+            height: self.height,
+            round: self.round,
+            step: self.step as u8,
+        };
+        if should_sign_vote(state, &self) {
+            CheckedRequest::ValidRequest(ValidRequest::Vote(self))
+        } else {
+            CheckedRequest::DoubleSignVote(req_state)
+        }
+    }
+}
+impl Proposal {
+    pub fn check(self, state: &ConsensusData) -> CheckedRequest {
+        let req_state = ConsensusData {
+            height: self.height,
+            round: self.round,
+            step: self.step as u8,
+        };
+        if should_sign_proposal(state, &self) {
+            CheckedRequest::ValidRequest(ValidRequest::Proposal(self))
+        } else {
+            CheckedRequest::DoubleSignProposal(req_state)
         }
     }
 }
