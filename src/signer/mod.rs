@@ -1,6 +1,8 @@
+use crate::backend::PublicKey;
 use crate::backend::SigningBackend;
 use crate::error::SignerError;
-use crate::protocol::{Request, Response};
+use crate::persist::PersistedRequest;
+use crate::protocol::{Request, Response, ValidRequest};
 use crate::types::{BufferError, SignedMsgType};
 use crate::versions::ProtocolVersion;
 use log::{debug, info};
@@ -27,28 +29,28 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
         }
     }
 
-    // TODO: the signing and sending sig should be split further maybe?
-    pub fn process_request(
+    pub fn public_key(&self) -> Result<PublicKey, SignerError> {
+        self.signer.public_key()
+    }
+
+    pub fn sign(
         &mut self,
-        request: Request,
+        request: PersistedRequest,
     ) -> Result<
         Response<V::ProposalResponse, V::VoteResponse, V::PubKeyResponse, V::PingResponse>,
         SignerError,
     > {
-        let response = match request {
-            Request::SignProposal(proposal) => {
+        match request.0 {
+            ValidRequest::Proposal(proposal) => {
                 let signable_data = V::proposal_to_bytes(&proposal, &self.chain_id)?;
                 let signature = self.signer.sign(&signable_data).unwrap();
                 debug!("Signature: {}", hex::encode(&signature));
                 debug!("Signable data: {}", hex::encode(&signable_data));
 
-                Response::SignedProposal(V::create_proposal_response(
-                    Some(proposal.clone()),
-                    signature,
-                    None,
-                ))
+                let response = V::create_proposal_response(&proposal, signature);
+                Ok(Response::SignedProposal(response))
             }
-            Request::SignVote(vote) => {
+            ValidRequest::Vote(vote) => {
                 // TODO: chain id should be parsed from the request, and compared to what we're expecting
                 // ^ no chain_id in the request. if we configure wrong chain_id in the config
                 // ^ actually it IS in the request and it IS in the canonical vote / proposal
@@ -73,31 +75,16 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
                         hex::encode(&extension_signable_data)
                     );
                     debug!("Extension signature: {}", hex::encode(&ext_signature));
-                    return Ok(Response::SignedVote(V::create_vote_response(
-                        Some(vote.clone()),
-                        signature,
-                        Some(ext_signature),
-                        None,
-                    )));
+                    let response = V::create_vote_response(&vote, signature, Some(ext_signature));
+                    return Ok(Response::SignedVote(response));
                 }
                 info!("no vote ext this time");
                 debug!("Signature: {}", hex::encode(&signature));
                 debug!("Signable data: {}", hex::encode(&signable_data));
-                Response::SignedVote(V::create_vote_response(
-                    Some(vote.clone()),
-                    signature,
-                    None,
-                    None,
-                ))
+                let response = V::create_vote_response(&vote, signature, None);
+                Ok(Response::SignedVote(response))
             }
-            Request::ShowPublicKey => {
-                let public_key = self.signer.public_key().unwrap();
-                Response::PublicKey(V::create_pub_key_response(public_key))
-            }
-            Request::Ping => Response::Ping(V::create_ping_response()),
-        };
-
-        Ok(response)
+        }
     }
 
     pub fn read_request(&mut self) -> Result<Request, SignerError> {

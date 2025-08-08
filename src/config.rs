@@ -19,6 +19,18 @@ pub struct RaftConfig {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct LocalConfig {
+    pub path: PathBuf,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(tag = "persist", rename_all = "snake_case")]
+pub enum PersistConfig {
+    Local { local: LocalConfig },
+    Raft { raft: RaftConfig },
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Config {
     pub log_level: String,
     pub chain_id: String,
@@ -26,7 +38,8 @@ pub struct Config {
     pub connections: Vec<ConnectionConfig>,
     pub signing_mode: SigningMode,
 
-    pub raft: RaftConfig,
+    #[serde(flatten)]
+    pub persist: PersistConfig,
 
     #[serde(default)]
     pub signing: SigningConfigs,

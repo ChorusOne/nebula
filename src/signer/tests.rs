@@ -1,11 +1,12 @@
 use super::mock_connection::MockCometBFTConnection;
 use crate::backend::Ed25519Signer;
 use crate::proto::v0_38;
-use crate::protocol::Request;
 use crate::signer::Signer;
-use crate::types::SignedMsgType;
+use crate::types::{ConsensusData, SignedMsgType};
 use crate::versions::VersionV0_38;
+use crate::{handle_single_request, persist};
 use prost::Message;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 #[test]
@@ -30,17 +31,21 @@ fn signer_with_mock_connection() {
             proposal_req,
         )),
     };
+    let p = persist::LocalState::new(&ConsensusData {
+        height: 0,
+        round: 0,
+        step: 0,
+    });
     let mut req_bytes = Vec::new();
     msg.encode_length_delimited(&mut req_bytes).unwrap();
 
     handle.request_sender.send(req_bytes).unwrap();
 
-    let request = signer.read_request().unwrap();
-    assert!(matches!(request, Request::SignProposal(_)));
-
-    let response = signer.process_request(request).unwrap();
-
-    signer.send_response(response).unwrap();
+    handle_single_request(
+        &mut signer,
+        &Arc::new(Mutex::new(persist::PersistVariants::Local(p))),
+    )
+    .unwrap();
 
     let response_bytes = handle
         .response_receiver
