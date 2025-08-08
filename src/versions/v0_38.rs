@@ -242,6 +242,16 @@ impl ProtocolVersion for VersionV0_38 {
     fn create_ping_response() -> Self::PingResponse {
         v0_38::privval::PingResponse {}
     }
+
+    fn create_error_response(message: &str) -> Response<Self::ProposalResponse, Self::VoteResponse, Self::PubKeyResponse, Self::PingResponse> {
+        Response::SignedProposal(v0_38::privval::SignedProposalResponse {
+            proposal: None,
+            error: Some(v0_38::privval::RemoteSignerError {
+                code: 1,
+                description: message.to_string(),
+            }),
+        })
+    }
 }
 
 impl TryFrom<v0_38::types::Vote> for Vote {

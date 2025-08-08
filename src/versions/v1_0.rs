@@ -233,6 +233,16 @@ impl ProtocolVersion for VersionV1_0 {
     fn create_ping_response() -> Self::PingResponse {
         v1::privval::PingResponse {}
     }
+
+    fn create_error_response(message: &str) -> Response<Self::ProposalResponse, Self::VoteResponse, Self::PubKeyResponse, Self::PingResponse> {
+        Response::SignedProposal(v1::privval::SignedProposalResponse {
+            proposal: None,
+            error: Some(v1::privval::RemoteSignerError {
+                code: 1,
+                description: message.to_string(),
+            }),
+        })
+    }
 }
 fn tendermint_vote_to_domain(vote: v1::types::Vote) -> Result<Vote, SignerError> {
     Ok(Vote {

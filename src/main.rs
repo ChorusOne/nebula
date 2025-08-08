@@ -33,9 +33,7 @@ use std::thread;
 use std::time::Duration;
 use tendermint_p2p::secret_connection::SecretConnection;
 use types::{ConsensusData, KeyType};
-use versions::{
-    ProtocolVersion, VersionV0_34, VersionV0_37, VersionV0_38, VersionV1_0, generate_error_response,
-};
+use versions::{ProtocolVersion, VersionV0_34, VersionV0_37, VersionV0_38, VersionV1_0};
 
 fn main() -> Result<(), SignerError> {
     let config_path = std::env::args()
@@ -183,10 +181,11 @@ pub fn handle_single_request<T: SigningBackend, V: ProtocolVersion, C: Read + Wr
                 request,
                 cd: new_state,
             } => {
-                let err_response =
-                    generate_error_response::<V>(&request, "Cannot persist new consensus state");
-
+                // TODO: signer should only take something that's been persisted
                 if let Err(e) = guard.persist(&new_state) {
+                    let err_response = V::create_error_response(&format!(
+                        "Cannot persist new consensus state: {e:?}"
+                    ));
                     error!("Could not persist state: {e:?}");
                     err_response
                 } else {

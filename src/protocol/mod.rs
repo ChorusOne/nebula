@@ -42,25 +42,33 @@ impl SignRequest {
     pub fn check(self, state: &ConsensusData) -> CheckedRequest {
         match self {
             SignRequest::Vote(vote) => {
+                let req_state = ConsensusData {
+                    height: vote.height,
+                    round: vote.round,
+                    step: vote.step as u8,
+                };
                 if should_sign_vote(state, &vote) {
-                    CheckedRequest::ValidRequest { request: ValidRequest::Vote(vote), cd: state.clone() }
+                    CheckedRequest::ValidRequest {
+                        request: ValidRequest::Vote(vote),
+                        cd: req_state,
+                    }
                 } else {
-                    CheckedRequest::DoubleSignVote(ConsensusData {
-                        height: vote.height,
-                        round: vote.round,
-                        step: vote.step as u8,
-                    })
+                    CheckedRequest::DoubleSignVote(req_state)
                 }
             }
             SignRequest::Proposal(proposal) => {
+                let req_state = ConsensusData {
+                    height: proposal.height,
+                    round: proposal.round,
+                    step: proposal.step as u8,
+                };
                 if should_sign_proposal(state, &proposal) {
-                    CheckedRequest::ValidRequest { request: ValidRequest::Proposal(proposal), cd: state.clone()}
+                    CheckedRequest::ValidRequest {
+                        request: ValidRequest::Proposal(proposal),
+                        cd: req_state,
+                    }
                 } else {
-                    CheckedRequest::DoubleSignProposal(ConsensusData {
-                        height: proposal.height,
-                        round: proposal.round,
-                        step: proposal.step as u8,
-                    })
+                    CheckedRequest::DoubleSignProposal(req_state)
                 }
             }
         }

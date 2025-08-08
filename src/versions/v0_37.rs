@@ -68,6 +68,10 @@ impl ProtocolVersion for VersionV0_37 {
         todo!()
     }
 
+    fn create_error_response(_message: &str) -> Response<Self::ProposalResponse, Self::VoteResponse, Self::PubKeyResponse, Self::PingResponse> {
+        todo!()
+    }
+
     fn vote_extension_to_bytes(_vote: &Vote, _chain_id: &str) -> Result<Vec<u8>, SignerError> {
         todo!()
     }

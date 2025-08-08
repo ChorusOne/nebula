@@ -1,5 +1,5 @@
 use crate::backend::PublicKey;
-use crate::protocol::{Request, Response, ValidRequest};
+use crate::protocol::{Request, Response};
 use crate::types::{ConsensusData, Proposal, Vote};
 
 pub mod v0_34;
@@ -42,17 +42,12 @@ pub trait ProtocolVersion {
     ) -> Self::VoteResponse;
     fn create_pub_key_response(pub_key: &PublicKey) -> Self::PubKeyResponse;
     fn create_ping_response() -> Self::PingResponse;
-}
-
-pub fn generate_error_response<V: ProtocolVersion>(
-    r: &ValidRequest,
-    _message: &str,
-) -> Response<V::ProposalResponse, V::VoteResponse, V::PubKeyResponse, V::PingResponse> {
-    let cd = ConsensusData::from(r);
-    match r {
-        ValidRequest::Proposal(_) => {
-            Response::SignedProposal(V::create_double_sign_prop_response(&cd))
-        }
-        ValidRequest::Vote(_) => Response::SignedVote(V::create_double_sign_vote_response(&cd)),
-    }
+    fn create_error_response(
+        message: &str,
+    ) -> Response<
+        Self::ProposalResponse,
+        Self::VoteResponse,
+        Self::PubKeyResponse,
+        Self::PingResponse,
+    >;
 }
