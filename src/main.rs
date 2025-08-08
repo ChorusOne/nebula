@@ -23,7 +23,7 @@ use config::{Config, PersistConfig, ProtocolVersionConfig};
 use connection::open_secret_connection;
 use log::{debug, error, info, warn};
 use persist::{Persist, PersistVariants};
-use protocol::CheckedRequest;
+use protocol::{CheckedRequest, Request, ValidRequest};
 use signer::Signer;
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -162,6 +162,51 @@ fn handle_connection<V: ProtocolVersion + Send + 'static>(
     }
 }
 
+enum RequestProcessingAction<V: ProtocolVersion> {
+    PersistAndSign {
+        request: ValidRequest,
+        new_state: ConsensusData,
+    },
+    ReplyWith(Response<V::ProposalResponse, V::VoteResponse, V::PubKeyResponse, V::PingResponse>),
+    ShowPublicKey,
+}
+
+fn process_request<T: SigningBackend, V: ProtocolVersion>(
+    request: Request,
+    consensus_state: &ConsensusData,
+) -> RequestProcessingAction<V> {
+    match request {
+        Request::Proposal(proposal) => match proposal.check(consensus_state) {
+            CheckedRequest::ValidRequest {
+                request,
+                cd: new_state,
+            } => RequestProcessingAction::PersistAndSign { request, new_state },
+            CheckedRequest::DoubleSignProposal(cd) => RequestProcessingAction::ReplyWith(
+                Response::SignedProposal(V::create_double_sign_prop_response(&cd)),
+            ),
+            CheckedRequest::DoubleSignVote(cd) => RequestProcessingAction::ReplyWith(
+                Response::SignedVote(V::create_double_sign_vote_response(&cd)),
+            ),
+        },
+        Request::Vote(vote) => match vote.check(consensus_state) {
+            CheckedRequest::ValidRequest {
+                request,
+                cd: new_state,
+            } => RequestProcessingAction::PersistAndSign { request, new_state },
+            CheckedRequest::DoubleSignProposal(cd) => RequestProcessingAction::ReplyWith(
+                Response::SignedProposal(V::create_double_sign_prop_response(&cd)),
+            ),
+            CheckedRequest::DoubleSignVote(cd) => RequestProcessingAction::ReplyWith(
+                Response::SignedVote(V::create_double_sign_vote_response(&cd)),
+            ),
+        },
+        Request::ShowPublicKey => RequestProcessingAction::ShowPublicKey,
+        Request::Ping => {
+            RequestProcessingAction::ReplyWith(Response::Ping(V::create_ping_response()))
+        }
+    }
+}
+
 pub fn handle_single_request<T: SigningBackend, V: ProtocolVersion, C: Read + Write>(
     signer: &mut Signer<T, V, C>,
     persist: &Arc<Mutex<PersistVariants>>,
@@ -175,35 +220,22 @@ pub fn handle_single_request<T: SigningBackend, V: ProtocolVersion, C: Read + Wr
     let mut guard = persist.lock().unwrap();
     let consensus_state = guard.state();
 
-    let response = match request {
-        protocol::Request::Signable(s) => match s.check(&consensus_state) {
-            CheckedRequest::ValidRequest {
-                request,
-                cd: new_state,
-            } => {
-                // TODO: signer should only take something that's been persisted
-                if let Err(e) = guard.persist(&new_state) {
-                    let err_response = V::create_error_response(&format!(
-                        "Cannot persist new consensus state: {e:?}"
-                    ));
-                    error!("Could not persist state: {e:?}");
-                    err_response
-                } else {
-                    signer.sign(request)?
-                }
+    let action = process_request::<T, V>(request, &consensus_state);
+    let response = match action {
+        RequestProcessingAction::PersistAndSign { request, new_state } => {
+            if let Err(e) = guard.persist(&new_state) {
+                error!("Could not persist state: {e:?}");
+                V::create_error_response(&format!("Cannot persist new consensus state: {e:?}"))
+            } else {
+                // TODO: signer should only be able to sign with a PersistedValue or similar
+                signer.sign(request)?
             }
-            CheckedRequest::DoubleSignProposal(cd) => {
-                Response::SignedProposal(V::create_double_sign_prop_response(&cd))
-            }
-            CheckedRequest::DoubleSignVote(cd) => {
-                Response::SignedVote(V::create_double_sign_vote_response(&cd))
-            }
-        },
-        protocol::Request::ShowPublicKey => {
+        }
+        RequestProcessingAction::ReplyWith(response) => response,
+        RequestProcessingAction::ShowPublicKey => {
             let public_key = signer.public_key()?;
             Response::PublicKey(V::create_pub_key_response(&public_key))
         }
-        protocol::Request::Ping => Response::Ping(V::create_ping_response()),
     };
 
     info!("Processing request took: {:?}", start.elapsed());
@@ -212,7 +244,6 @@ pub fn handle_single_request<T: SigningBackend, V: ProtocolVersion, C: Read + Wr
     debug!("Sending response to validator");
     signer.send_response(response)?;
     drop(guard);
-    // we need to drop the guard _after_ sending the response to avoid race conditions
     info!("Sending the response took: {:?}", start.elapsed());
     Ok(())
 }
