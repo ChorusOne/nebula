@@ -34,7 +34,9 @@ use std::thread;
 use std::time::Duration;
 use tendermint_p2p::secret_connection::SecretConnection;
 use types::{ConsensusData, KeyType};
-use versions::{ProtocolVersion, VersionV0_34, VersionV0_37, VersionV0_38, VersionV1_0};
+use versions::{
+    ProtocolVersion, VersionV0_34, VersionV0_37, VersionV0_38, VersionV1_0, generate_error_response,
+};
 
 fn main() -> Result<(), SignerError> {
     let config_path = std::env::args()
@@ -180,12 +182,13 @@ pub fn handle_single_request<T: SigningBackend, V: ProtocolVersion, C: Read + Wr
 
     let response = match processed_request {
         ProcessedRequest::Valid { request, new_state } => {
+            let err_response =
+                generate_error_response::<V>(&request, "Cannot persist new consensus state");
+
             let response = signer.sign(request)?;
             if let Err(e) = guard.persist(&new_state) {
-                // TODO: this should not be Valid but Prop / Vote
-                Response::SignedProposal(V::create_error_prop_response(&format!(
-                    "Cannot persist new consensus state: {e:?}"
-                )))
+                error!("Could not persist state: {e:?}");
+                err_response
             } else {
                 response
             }

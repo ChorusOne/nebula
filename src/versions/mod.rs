@@ -1,5 +1,6 @@
 use crate::backend::PublicKey;
 use crate::protocol::{Request, Response};
+use crate::safeguards::ValidRequest;
 use crate::types::{Proposal, Vote};
 
 pub mod v0_34;
@@ -42,4 +43,16 @@ pub trait ProtocolVersion {
     ) -> Self::VoteResponse;
     fn create_pub_key_response(pub_key: &PublicKey) -> Self::PubKeyResponse;
     fn create_ping_response() -> Self::PingResponse;
+}
+
+pub fn generate_error_response<V: ProtocolVersion>(
+    r: &ValidRequest,
+    message: &str,
+) -> Response<V::ProposalResponse, V::VoteResponse, V::PubKeyResponse, V::PingResponse> {
+    match r {
+        ValidRequest::Proposal(_) => {
+            Response::SignedProposal(V::create_error_prop_response(message))
+        }
+        ValidRequest::Vote(_) => Response::SignedVote(V::create_error_vote_response(message)),
+    }
 }
