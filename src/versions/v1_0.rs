@@ -4,7 +4,7 @@ use crate::error::SignerError;
 use crate::proto::v1;
 use crate::protocol::{Request, Response};
 use crate::types::{BlockId, PartSetHeader, Proposal, SignedMsgType, Vote};
-use log::{info, trace};
+use log::trace;
 use prost::Message;
 
 pub struct VersionV1_0;

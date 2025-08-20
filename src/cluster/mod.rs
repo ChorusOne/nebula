@@ -23,6 +23,7 @@ enum RaftMessage {
     Propose(ConsensusData, Sender<Result<(), SignerError>>),
     Msg(RaftProtoMessage),
     TransferLeadership(u64),
+    #[allow(dead_code)]
     Shutdown,
 }
 
@@ -31,10 +32,12 @@ pub struct SignerRaftNode {
     pub signer_state: Arc<RwLock<ConsensusData>>,
     proposal_sender: Sender<RaftMessage>,
     raft_state: Arc<RwLock<(StateRole, u64)>>,
+    #[allow(dead_code)]
     shutdown_handle: Arc<RwLock<Option<thread::JoinHandle<()>>>>,
 }
 
 impl SignerRaftNode {
+    #[allow(dead_code)]
     pub fn shutdown(&self) -> Result<(), SignerError> {
         info!("Shutting down node {}", self.node_id);
 

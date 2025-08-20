@@ -1,6 +1,9 @@
 pub mod vault_signer_plugin;
 pub mod vault_transit;
 
+use crate::backend::vault_signer_plugin::PluginVaultSigner;
+use crate::backend::vault_transit::TransitVaultSigner;
+use crate::config::{Config, SigningMode};
 use crate::error::SignerError;
 use base64::{Engine as _, engine::general_purpose};
 use k256::ecdsa::signature::SignerMut;
@@ -160,5 +163,28 @@ impl SigningBackend for Bls12381Signer {
             bytes: compressed.to_vec(),
             key_type: KeyType::Bls12381,
         })
+    }
+}
+
+pub fn create_backend(config: &Config) -> Result<Box<dyn SigningBackend>, SignerError> {
+    match config.signing_mode {
+        SigningMode::Native => {
+            let native = config.signing.native.as_ref().unwrap();
+            let path = &native.private_key_path;
+
+            match native.key_type {
+                KeyType::Ed25519 => Ok(Box::new(Ed25519Signer::from_key_file(path)?)),
+                KeyType::Secp256k1 => Ok(Box::new(Secp256k1Signer::from_key_file(path)?)),
+                KeyType::Bls12381 => Ok(Box::new(Bls12381Signer::from_key_file(path)?)),
+            }
+        }
+        SigningMode::VaultTransit => {
+            let vault = config.signing.vault.as_ref().unwrap();
+            Ok(Box::new(TransitVaultSigner::new(vault.clone())?))
+        }
+        SigningMode::VaultSignerPlugin => {
+            let cfg = config.signing.vault.as_ref().unwrap();
+            Ok(Box::new(PluginVaultSigner::new(cfg.clone())?))
+        }
     }
 }
