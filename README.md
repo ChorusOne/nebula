@@ -7,9 +7,13 @@ Nebula is a CometBFT remote signer. It uses Raft to create a cluster of signer n
 ## Principles, core assumptions
 
 The core principle of Nebula is that the decision to sign a block is treated as a state transition in a distributed state machine.
+
 A signature is only produced and transmitted *after* the state transition has been successfully committed to a quorum of nodes in the Raft cluster.
+
 There is only ONE signer (Raft leader) at a time that is capable of connecting to CometBFT nodes.
+
 Nebula tries to err on the side of signing less, than actually signing more, so in turbulent leadership changes, uptime is expected to suffer slightly.
+
 Nebula connects to only one blockchain, with only one consensus key. That means you will need one instance per identity on a network.
 
 ### Sequence of a Signing Request
