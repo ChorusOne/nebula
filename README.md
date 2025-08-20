@@ -50,3 +50,5 @@ Nebula is currently evaluated primarily through integration tests.
     -   `vault_transit`: Uses HashiCorp Vault's Transit engine.
     -   `vault_signer_plugin`: Uses a custom Vault plugin.
 -   Native key types: Ed25519, Secp256k1, Bls12381.
+
+## Usage

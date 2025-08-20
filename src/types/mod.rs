@@ -138,7 +138,7 @@ pub enum BufferError {
     NeedMoreBytes,
 }
 
-#[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Clone)]
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Clone, clap::ValueEnum)]
 #[serde(rename_all = "snake_case")]
 pub enum KeyType {
     Ed25519,

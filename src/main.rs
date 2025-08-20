@@ -4,6 +4,7 @@ mod config;
 mod connection;
 mod error;
 mod handler;
+mod keygen;
 mod leader;
 mod proto;
 mod protocol;
@@ -12,7 +13,7 @@ mod signer;
 mod types;
 mod versions;
 
-use crate::error::SignerError;
+use crate::{error::SignerError, types::KeyType};
 use clap::{Parser as _, Subcommand};
 use cluster::SignerRaftNode;
 use config::{Config, ProtocolVersionConfig};
@@ -41,6 +42,18 @@ enum Commands {
         #[arg(short, long)]
         backend: config::SigningMode,
     },
+    Keys {
+        #[command(subcommand)]
+        command: KeysCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum KeysCommands {
+    Generate {
+        #[arg(long, value_enum)]
+        key_type: types::KeyType,
+    },
 }
 
 fn main() -> Result<(), SignerError> {
@@ -63,6 +76,23 @@ fn main() -> Result<(), SignerError> {
             let default_config = Config::default_config(backend);
             default_config.write_to_file(&output_path)?;
             println!("Generated default configuration at '{}'", output_path);
+            Ok(())
+        }
+        Commands::Keys { command } => {
+            match command {
+                KeysCommands::Generate { key_type } => {
+                    let key_type_str = match key_type {
+                        KeyType::Ed25519 => "ed25519",
+                        KeyType::Secp256k1 => "secp256k1",
+                        KeyType::Bls12381 => "bls12381",
+                    };
+
+                    if let Err(e) = keygen::generate_keys(key_type_str) {
+                        eprintln!("Key generation failed: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+            }
             Ok(())
         }
     }
