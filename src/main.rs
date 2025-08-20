@@ -31,8 +31,15 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     Start {
-        #[arg(short, long = "config", default_value = "config.toml")]
+        #[arg(short, long = "config")]
         config_path: String,
+    },
+    Init {
+        #[arg(short, long)]
+        output_path: String,
+
+        #[arg(short, long)]
+        backend: config::SigningMode,
     },
 }
 
@@ -48,6 +55,15 @@ fn main() -> Result<(), SignerError> {
                 )
                 .init();
             start_signer(config)
+        }
+        Commands::Init {
+            output_path,
+            backend,
+        } => {
+            let default_config = Config::default_config(backend);
+            default_config.write_to_file(&output_path)?;
+            println!("Generated default configuration at '{}'", output_path);
+            Ok(())
         }
     }
 }

@@ -53,11 +53,63 @@ impl Config {
         let config: Config = toml::from_str(&contents)?;
         Ok(config)
     }
+
+    pub fn default_config(backend: SigningMode) -> Self {
+        Config {
+            log_level: "info".to_string(),
+            chain_id: "test-chain-v1".to_string(),
+            version: ProtocolVersionConfig::V1_0,
+            connections: vec![
+                ConnectionConfig {
+                    host: "127.0.0.1".to_string(),
+                    port: 36558,
+                },
+                ConnectionConfig {
+                    host: "127.0.0.1".to_string(),
+                    port: 26558,
+                },
+            ],
+            signing_mode: backend.clone(),
+            raft: RaftConfig {
+                node_id: 1,
+                bind_addr: "127.0.0.1:8080".to_string(),
+                data_path: "./raft_data".to_string(),
+                peers: vec![],
+                initial_state_path: "./initial_state.json".to_string(),
+            },
+            signing: match backend {
+                SigningMode::Native => SigningConfigs {
+                    native: Some(NativeConfig {
+                        private_key_path: PathBuf::from("./private_key.pem"),
+                        key_type: crate::types::KeyType::Ed25519,
+                    }),
+                    vault: None,
+                },
+                SigningMode::VaultSignerPlugin | SigningMode::VaultTransit => SigningConfigs {
+                    vault: Some(VaultSignerConfig {
+                        address: "https://vault.example.com:8200".to_string(),
+                        token: "".to_string(),
+                        transit_path: "transit".to_string(),
+                        key_name: "signing-key".to_string(),
+                        cacert: None,
+                        skip_verify: false,
+                    }),
+                    native: None,
+                },
+            },
+        }
+    }
+
+    pub fn write_to_file(&self, path: &str) -> Result<(), SignerError> {
+        let toml_string = toml::to_string_pretty(self).expect("Unable to write config to file");
+        fs::write(path, toml_string)?;
+        Ok(())
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Clone)]
 #[serde(rename_all = "snake_case")]
-#[derive(Default)]
+#[derive(Default, clap::ValueEnum)]
 pub enum SigningMode {
     VaultTransit,
     VaultSignerPlugin,
