@@ -80,7 +80,7 @@ impl Config {
             signing: match backend {
                 SigningMode::Native => SigningConfigs {
                     native: Some(NativeConfig {
-                        private_key_path: PathBuf::from("./private_key.pem"),
+                        private_key_path: PathBuf::from("./privkey"),
                         key_type: crate::types::KeyType::Ed25519,
                     }),
                     vault: None,

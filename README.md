@@ -10,13 +10,14 @@ The core principle of Nebula is that the decision to sign a block is treated as 
 A signature is only produced and transmitted *after* the state transition has been successfully committed to a quorum of nodes in the Raft cluster.
 There is only ONE signer (Raft leader) at a time that is capable of connecting to CometBFT nodes.
 Nebula tries to err on the side of signing less, than actually signing more, so in turbulent leadership changes, uptime is expected to suffer slightly.
+Nebula connects to only one blockchain, with only one consensus key. That means you will need one instance per identity on a network.
 
 ### Sequence of a Signing Request
 
-Consider a "happy" case, when leader of the Nebula cluster receives a signing request, e.g a proposal at height 100, at round 1. The flow is as follows:
+Consider a "happy" case, where leader of the Nebula cluster connected to a single CometBFT node receives a signing request, e.g a proposal at height 100, at round 1. The flow is as follows:
 
-1.  A mutex is acquired to ensure only one signing request is processed at a time. (`src/handler.rs`)
-2.  The node verifies it is still the Raft leader. If not, it bails early.
+1. A mutex is acquired to ensure requests from only one node is processed at a time. (`src/handler.rs`)
+2. The node verifies it is still the Raft leader. If not, it bails early.
 3. The request's Height/Round/Step (HRS) is checked against the last known committed state. If signing would violate CometBFT's double-signing rules, the request is rejected. This logic is in `src/safeguards.rs`.
 4. Leader proposes the new HRS state (`{h: 100, r: 1, step: Proposal}`) to the Raft cluster. The handler thread then **blocks** and waits for confirmation that this entry has been committed by a majority of the cluster.
     -   This is implemented in `SignerRaftNode::replicate_state` (`src/cluster/mod.rs`), which uses an `mpsc::channel` to wait for a callback.
@@ -24,7 +25,22 @@ Consider a "happy" case, when leader of the Nebula cluster receives a signing re
     -   If a quorum cannot be reached, this step will time out and return an error.
 5.  Leader usees the configured signing backend to produce a signature.
 6.  The signature is sent back to the CometBFT validator.
-7.  Mutex acquired at the beginning is r``eleased.
+7.  Mutex acquired at the beginning is released.
+
+After which, CometBFT node propagates the signature.
+
+Now, consider a very similar case, but the Nebula leader is connected to two CometBFT nodes, say nodes A and B. Nebula received a signing request from node A first.
+For node A, the signing flow looks identical to the one described above. Node B will send the same request, and what happens is as follows:
+
+1. Handler will wait on the mutex until Node A's request is served.
+2. The node verifies it is still the Raft leader. If not, it bails early.
+3. The request's Height/Round/Step (HRS) is checked against the last known committed state. Because this request is the same as one served just before, it will fail here. Nebula will log: `Prevented double signing vote`, and the CometBFT node will report an error:
+```
+failed signing vote err="signerEndpoint returned error #1: Would double-sign vote at same height/round" height=100 module=consensus round=1 vote={"block_id":{"hash":"41648E00251B1F6A94089BF7F4D942B640665325863F0D92E44D36AEBB604904","parts":{"hash":"DDCA7D5234BC6EB67F2E91E68CC22E434C3B2BA5D5D77CFAA44D9FC0D254AC5F","total":1}},"extension":null,"extension_signature":null,"height":"100","round":1,"signature":null,"timestamp":"2025-08-20T15:11:30.581382895Z","type":1,"validator_address":"0F38A435D89DF98B10BE57928BA79111D7440379","validator_index":23}
+```
+
+This concludes the
+
 
 ## Testing Strategy and Limitations
 
@@ -32,10 +48,7 @@ Nebula is currently evaluated primarily through integration tests.
 
 -   The test suite in `src/cluster/integration_tests.rs` creates an in-memory cluster of multiple Raft nodes.
 -   The network connection to the CometBFT validator is mocked.
--   The tests simulate failures by shutting down nodes, transferring leadership, and sending duplicate or out-of-order requests. Some of the test cases include:
-    -   `double_sign_prevention_after_leadership_change`: Directly validates the failure scenario described above.
-    -   `no_replicate_acks`: Confirms that signing fails if a leader cannot form a quorum, which is the correct safe behavior.
-    -   `new_leader_signing`: Ensures that a newly elected leader correctly loads state and can proceed with signing *new* blocks.
+-   The tests simulate failures by shutting down nodes, transferring leadership, and sending duplicate or out-of-order requests.
 
 ### Current Limitations
 
@@ -52,3 +65,76 @@ Nebula is currently evaluated primarily through integration tests.
 -   Native key types: Ed25519, Secp256k1, Bls12381.
 
 ## Usage
+
+Run `init` with `--help` to check available backends to bootstrap with:
+```
+nebula init --help
+Usage: nebula init --output-path <OUTPUT_PATH> --backend <BACKEND>
+
+Options:
+  -o, --output-path <OUTPUT_PATH>
+  -b, --backend <BACKEND>          [possible values: vault-transit, vault-signer-plugin, native]
+```
+
+
+Generate a default config file at `test.toml`:
+```
+nebula init --output-path test.toml --backend native
+```
+
+Example output:
+
+```
+log_level = "info"
+chain_id = "test-chain-v1"
+version = "v1_0"
+signing_mode = "native"
+
+[[connections]]
+host = "127.0.0.1"
+port = 36558
+
+[[connections]]
+host = "127.0.0.1"
+port = 26558
+
+[raft]
+node_id = 1
+bind_addr = "127.0.0.1:8080"
+data_path = "./raft_data"
+initial_state_path = "./initial_state.json"
+
+[[raft.peers]]
+id = 1
+addr = "127.0.0.1:7001"
+
+
+[signing.native]
+private_key_path = "./privkey"
+key_type = "ed25519"
+```
+
+`connections` array is the list of CometBFT the Nebula leader will connect to.
+`host` and `port` must be set in accordace with `priv_validator_laddr` in CometBFT's config.toml.
+
+`raft` section defines settings for the Raft signer cluster.
+Peer list must include EVERY member of the cluster, including the very node you're setting up.
+
+For native signing, you can generate keys with `./target/release/nebula keys generate --key-type ed25519`.
+Example output:
+```
+private key: UINHR9vYjWllyqYo+Jxc5fjYUBox3eRygj6dbUughIE=
+{
+  "address": "D79D2CD52901D6D42D7617B977447EEC1CA00887",
+  "priv_key": {
+    "type": "tendermint/PrivKeyEd25519",
+    "value": "UINHR9vYjWllyqYo+Jxc5fjYUBox3eRygj6dbUughIEVDPizljxIzHVAz2b6YuTdmuLUTgn12On0wXXxyEkhHw=="
+  },
+  "pub_key": {
+    "type": "tendermint/PubKeyEd25519",
+    "value": "FQz4s5Y8SMx1QM9m+mLk3Zri1E4J9djp9MF18chJIR8="
+  }
+}
+```
+
+In this case, `UINHR9vYjWllyqYo+Jxc5fjYUBox3eRygj6dbUughIE=` must be put under ./private_key.pem.
