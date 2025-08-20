@@ -13,24 +13,43 @@ mod types;
 mod versions;
 
 use crate::error::SignerError;
+use clap::{Parser as _, Subcommand};
 use cluster::SignerRaftNode;
 use config::{Config, ProtocolVersionConfig};
 use log::{error, info, warn};
 use std::str::FromStr;
 use versions::{VersionV0_34, VersionV0_37, VersionV0_38, VersionV1_0};
 
-fn main() -> Result<(), SignerError> {
-    let config_path = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| "config.toml".to_string());
-    let config = Config::from_file(&config_path)?;
+#[derive(clap::Parser)]
+#[command(name = "signer")]
+#[command(about = "A distributed CometBFT remote signer")]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
 
-    env_logger::Builder::new()
-        .filter_level(
-            log::LevelFilter::from_str(&config.log_level).unwrap_or(log::LevelFilter::Info),
-        )
-        .init();
-    start_signer(config)
+#[derive(Subcommand)]
+enum Commands {
+    Start {
+        #[arg(short, long = "config", default_value = "config.toml")]
+        config_path: String,
+    },
+}
+
+fn main() -> Result<(), SignerError> {
+    let cli = Cli::parse();
+
+    match cli.command {
+        Commands::Start { config_path } => {
+            let config = Config::from_file(&config_path)?;
+            env_logger::Builder::new()
+                .filter_level(
+                    log::LevelFilter::from_str(&config.log_level).unwrap_or(log::LevelFilter::Info),
+                )
+                .init();
+            start_signer(config)
+        }
+    }
 }
 
 fn start_signer(config: Config) -> Result<(), SignerError> {
