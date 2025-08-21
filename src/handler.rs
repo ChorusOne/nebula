@@ -31,7 +31,20 @@ impl<V: ProtocolVersion + Send + 'static> SigningHandler<V> {
             Request::SignProposal(proposal) => {
                 let start = std::time::Instant::now();
                 debug!("waiting for lock");
-                let _guard = signing_lock.lock().unwrap();
+                let _guard = match signing_lock.try_lock() {
+                    Ok(g) => g,
+                    Err(_) => {
+                        warn!("couldn't acquire lock - signing for other node is in progress");
+                        return Ok(Response::SignedProposal(V::create_proposal_response(
+                            None,
+                            Vec::new(),
+                            Some(
+                                "Couldn't acquire lock - signing by other node is in progress"
+                                    .into(),
+                            ),
+                        )));
+                    }
+                };
                 debug!("lock acquired, took: {:?}", start.elapsed());
 
                 if !raft_node.is_leader() {
@@ -77,7 +90,21 @@ impl<V: ProtocolVersion + Send + 'static> SigningHandler<V> {
             Request::SignVote(vote) => {
                 let start = std::time::Instant::now();
                 debug!("waiting for lock");
-                let _guard = signing_lock.lock().unwrap();
+                let _guard = match signing_lock.try_lock() {
+                    Ok(g) => g,
+                    Err(_) => {
+                        warn!("couldn't acquire lock - signing for other node is in progress");
+                        return Ok(Response::SignedVote(V::create_vote_response(
+                            None,
+                            Vec::new(),
+                            None,
+                            Some(
+                                "Couldn't acquire lock - signing by other node is in progress"
+                                    .into(),
+                            ),
+                        )));
+                    }
+                };
                 debug!("lock acquired, took: {:?}", start.elapsed());
 
                 if !raft_node.is_leader() {
@@ -133,13 +160,20 @@ impl<V: ProtocolVersion + Send + 'static> SigningHandler<V> {
     ) -> Result<(), SignerError> {
         let start = std::time::Instant::now();
         let request = signer.read_request()?;
-        info!("Received request after {:?}", start.elapsed());
+        info!(
+            "Received request after {:?}: {:?}",
+            start.elapsed(),
+            request
+        );
+
         let start = std::time::Instant::now();
         let response = Self::process_request(signer, request, raft_node, signing_lock)?;
         info!("Processing request took: {:?}", start.elapsed());
+
         let start = std::time::Instant::now();
         signer.send_response(response)?;
         info!("Sending the response took: {:?}", start.elapsed());
+
         Ok(())
     }
 }
