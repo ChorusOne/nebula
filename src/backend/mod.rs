@@ -12,7 +12,7 @@ use std::path::Path;
 
 use crate::types::KeyType;
 
-pub trait SigningBackend {
+pub trait SigningBackend: Send {
     // TODO: this is mutable because of the secp256k1 signer.
     fn sign(&mut self, data: &[u8]) -> Result<Vec<u8>, SignerError>;
 
