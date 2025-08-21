@@ -31,20 +31,14 @@ impl<V: ProtocolVersion + Send + 'static> SigningHandler<V> {
             Request::SignProposal(proposal) => {
                 let start = std::time::Instant::now();
                 debug!("waiting for lock");
-                let _guard = match signing_lock.try_lock() {
-                    Ok(g) => g,
-                    Err(_) => {
-                        warn!("couldn't acquire lock - signing for other node is in progress");
-                        return Ok(Response::SignedProposal(V::create_proposal_response(
-                            None,
-                            Vec::new(),
-                            Some(
-                                "Couldn't acquire lock - signing by other node is in progress"
-                                    .into(),
-                            ),
-                        )));
-                    }
-                };
+                // This is to make sure that we only serve a request from one CometBFT node at a time.
+                // NOTE: another approach to this could be using try_lock and bailing early on error if the mutex is locked
+                // However, this would be bad in situations where one node is behind the network and is trying to sign old blocks
+                // Then, the up to date nodes would get an error because of a locked mutex
+                // The behind node, which got the mutex, would error because of double signing rules
+                // However, with using a blocking lock(), the node that is not signing will fall behind the network slightly.
+                //
+                let _guard = signing_lock.lock().unwrap();
                 debug!("lock acquired, took: {:?}", start.elapsed());
 
                 if !raft_node.is_leader() {
@@ -93,21 +87,7 @@ impl<V: ProtocolVersion + Send + 'static> SigningHandler<V> {
             Request::SignVote(vote) => {
                 let start = std::time::Instant::now();
                 debug!("waiting for lock");
-                let _guard = match signing_lock.try_lock() {
-                    Ok(g) => g,
-                    Err(_) => {
-                        warn!("couldn't acquire lock - signing for other node is in progress");
-                        return Ok(Response::SignedVote(V::create_vote_response(
-                            None,
-                            Vec::new(),
-                            None,
-                            Some(
-                                "Couldn't acquire lock - signing by other node is in progress"
-                                    .into(),
-                            ),
-                        )));
-                    }
-                };
+                let _guard = signing_lock.lock().unwrap();
                 debug!("lock acquired, took: {:?}", start.elapsed());
 
                 if !raft_node.is_leader() {

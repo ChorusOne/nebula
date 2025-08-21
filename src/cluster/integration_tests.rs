@@ -338,15 +338,15 @@ fn leader_election_during_signing() {
 
     let mut handles = Vec::new();
     for _i in 0..3 {
-        let leader = Arc::clone(&initial_leader);
         let success_counter = Arc::clone(&success_count);
         let error_counter = Arc::clone(&error_count);
         let lock_clone = Arc::clone(&harness.signing_lock);
+        let leader = harness.wait_for_leader(Duration::from_millis(15)).unwrap();
 
         let handle = thread::spawn(move || {
             let (mut signer, handle) = create_signer_with_mock_conn();
 
-            for height in 100..110 {
+            for height in 100..102 {
                 let req_bytes = create_proposal_request_bytes(height, 0);
                 if handle.request_sender.send(req_bytes).is_err() {
                     break;
@@ -378,10 +378,13 @@ fn leader_election_during_signing() {
                         error_counter.fetch_add(1, Ordering::SeqCst);
                     }
                 }
+                thread::sleep(Duration::from_millis(15))
             }
         });
         handles.push(handle);
     }
+
+    thread::sleep(Duration::from_millis(500));
 
     println!("initial leader id: {}", initial_leader_id);
     let transferee_id = (initial_leader_id % 3) + 1;
@@ -780,6 +783,7 @@ fn too_much_turbulence() {
     assert!(new_leader.is_none(), "leader election should fail");
 }
 
+// NOTE: this test was used for the try_lock mutex.
 #[test]
 fn signing_lock_prevents_concurrent_requests() {
     let harness = TestHarness::new(3);
@@ -865,7 +869,8 @@ fn signing_lock_prevents_concurrent_requests() {
         Some(v0_38::privval::message::Sum::SignedProposalResponse(res)) => {
             let err = res.error.expect("The losing request should have an error");
             assert!(
-                err.description.contains("Couldn't acquire lock"),
+                err.description
+                    .contains("Would double-sign proposal at same height/round/step"),
                 "Error message should indicate a lock failure. Got: '{}'",
                 err.description
             );
