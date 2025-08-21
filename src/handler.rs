@@ -48,7 +48,10 @@ impl<V: ProtocolVersion + Send + 'static> SigningHandler<V> {
                 debug!("lock acquired, took: {:?}", start.elapsed());
 
                 if !raft_node.is_leader() {
-                    warn!("we found out we are not the leader after acquiring lock");
+                    warn!(
+                        "we found out we are not the leader after acquiring lock, node id: {}",
+                        raft_node.node_id()
+                    );
                     return Ok(Response::SignedProposal(V::create_proposal_response(
                         None,
                         Vec::new(),

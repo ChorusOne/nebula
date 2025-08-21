@@ -14,7 +14,7 @@ use rand::Rng;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
-use std::thread;
+use std::thread::{self};
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
@@ -222,7 +222,6 @@ fn happy_path_signing_on_stable_cluster() {
         _ => panic!("Wrong response type"),
     }
 
-    thread::sleep(Duration::from_millis(500));
     for node in &harness.nodes {
         let state = node.signer_state.read().unwrap();
         assert_eq!(state.height, 100);
@@ -379,14 +378,10 @@ fn leader_election_during_signing() {
                         error_counter.fetch_add(1, Ordering::SeqCst);
                     }
                 }
-
-                thread::sleep(Duration::from_millis(15));
             }
         });
         handles.push(handle);
     }
-
-    thread::sleep(Duration::from_millis(500));
 
     println!("initial leader id: {}", initial_leader_id);
     let transferee_id = (initial_leader_id % 3) + 1;
@@ -395,8 +390,8 @@ fn leader_election_during_signing() {
         initial_leader_id, transferee_id
     );
     initial_leader.transfer_leadership(transferee_id).unwrap();
+    thread::sleep(Duration::from_millis(2500)); // wait for the new leader to come
 
-    thread::sleep(Duration::from_millis(2000));
     let new_leader = harness.wait_for_leader(Duration::from_secs(15));
     assert!(new_leader.is_some(), "New leader should be elected");
     let new_leader_id = new_leader.unwrap().raft_state.read().unwrap().1;
@@ -517,11 +512,9 @@ fn leadership_handoff() {
         .transfer_leadership(leader_clone.node_id % 3 + 1)
         .unwrap();
     thread::spawn(move || {
-        thread::sleep(Duration::from_millis(100));
         drop(leader_clone);
     });
 
-    thread::sleep(Duration::from_millis(200));
     let result = harness.handle_request(&mut signer, &leader);
 
     match result {
@@ -686,8 +679,6 @@ fn no_replicate_acks() {
 
     harness.shutdown_followers().unwrap();
 
-    thread::sleep(Duration::from_millis(500));
-
     harness
         .handle_request(&mut signer1, &initial_leader)
         .unwrap();
@@ -720,8 +711,6 @@ fn new_leader_signing() {
 
     harness.shutdown_node(initial_leader.node_id()).unwrap();
 
-    thread::sleep(Duration::from_millis(500));
-
     let new_leader = harness.wait_for_leader(Duration::from_secs(2)).unwrap();
 
     harness.handle_request(&mut signer1, &new_leader).unwrap();
@@ -751,13 +740,10 @@ fn some_turbulence() {
     handle1.request_sender.send(req_bytes).unwrap();
 
     harness.shutdown_node(initial_leader.node_id()).unwrap();
-    thread::sleep(Duration::from_millis(500));
     let another_leader = harness.wait_for_leader(Duration::from_secs(5)).unwrap();
     harness.shutdown_node(another_leader.node_id()).unwrap();
-    thread::sleep(Duration::from_millis(500));
     let yet_another_leader = harness.wait_for_leader(Duration::from_secs(5)).unwrap();
     harness.shutdown_node(yet_another_leader.node_id()).unwrap();
-    thread::sleep(Duration::from_millis(500));
 
     let new_leader = harness.wait_for_leader(Duration::from_secs(3)).unwrap();
 
@@ -782,16 +768,12 @@ fn too_much_turbulence() {
     let initial_leader = harness.wait_for_leader(Duration::from_secs(10)).unwrap();
 
     harness.shutdown_node(initial_leader.node_id()).unwrap();
-    thread::sleep(Duration::from_millis(500));
     let another_leader = harness.wait_for_leader(Duration::from_secs(5)).unwrap();
     harness.shutdown_node(another_leader.node_id()).unwrap();
-    thread::sleep(Duration::from_millis(500));
     let yet_another_leader = harness.wait_for_leader(Duration::from_secs(5)).unwrap();
     harness.shutdown_node(yet_another_leader.node_id()).unwrap();
-    thread::sleep(Duration::from_millis(500));
     let too_much_leaders = harness.wait_for_leader(Duration::from_secs(5)).unwrap();
     harness.shutdown_node(too_much_leaders.node_id()).unwrap();
-    thread::sleep(Duration::from_millis(500));
 
     let new_leader = harness.wait_for_leader(Duration::from_secs(3));
 
@@ -895,7 +877,6 @@ fn signing_lock_prevents_concurrent_requests() {
         _ => panic!("Expected a SignedProposalResponse for the failure case"),
     }
 
-    thread::sleep(Duration::from_millis(500));
     for node in &harness.nodes {
         let state = node.signer_state.read().unwrap();
         assert_eq!(
