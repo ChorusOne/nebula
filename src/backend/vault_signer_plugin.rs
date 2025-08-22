@@ -61,8 +61,10 @@ impl PluginVaultSigner {
         key_name: &str,
         token: &str,
     ) -> Result<PublicKey, SignerError> {
+        // compressed=true is only honored when secp256k1 keys are involved
+        // NOTE: maybe just use a config param here
         let url = format!(
-            "{}/v1/{}/keys/{}?compress=false",
+            "{}/v1/{}/keys/{}?compressed=true",
             base_url, mount_path, key_name
         );
         info!("fetching vault pubkey from {}", url);
@@ -131,7 +133,7 @@ impl PluginVaultSigner {
             })
         } else {
             serde_json::json!({
-                "payload": base64::Engine::encode(&base64::prelude::BASE64_STANDARD, data)
+                "payload": base64::Engine::encode(&base64::prelude::BASE64_STANDARD, data),
             })
         };
 
@@ -154,7 +156,9 @@ impl PluginVaultSigner {
 
         let parts: Vec<&str> = raw_sig_field.split(':').collect();
 
-        if parts.len() != 3 {
+        // standard vault transit response has 3 parts
+        // secp256k1 signer has 4
+        if parts.len() > 4 {
             return Err(SignerError::VaultError(format!(
                 "invalid Vault signature format: {}",
                 raw_sig_field
