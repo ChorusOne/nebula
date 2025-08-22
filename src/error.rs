@@ -49,6 +49,9 @@ pub enum SignerError {
 
     #[error("Todo: signing: {0}")]
     Crypto(String),
+
+    #[error("Config validation error: {0}")]
+    ConfigError(String),
 }
 
 impl From<base64::DecodeError> for SignerError {

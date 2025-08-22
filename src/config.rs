@@ -74,11 +74,15 @@ impl Config {
                 node_id: 1,
                 bind_addr: "127.0.0.1:8080".to_string(),
                 data_path: "./raft_data".to_string(),
-                peers: vec![],
+                peers: vec![PeerConfig {
+                    id: 1,
+                    addr: "127.0.0.1:8080".into(),
+                }],
                 initial_state_path: "./initial_state.json".to_string(),
             },
             signing: match backend {
                 SigningMode::Native => SigningConfigs {
+                    bls_dst: None,
                     native: Some(NativeConfig {
                         private_key_path: PathBuf::from("./privkey"),
                         key_type: crate::types::KeyType::Ed25519,
@@ -95,6 +99,7 @@ impl Config {
                         skip_verify: false,
                     }),
                     native: None,
+                    bls_dst: None,
                 },
             },
         }
@@ -119,6 +124,11 @@ pub enum SigningMode {
 
 #[derive(Debug, Deserialize, Serialize, Default, Clone)]
 pub struct SigningConfigs {
+    /// Domain Separation Tag for bls12_381 signing.
+    /// Vanilla CometBFT: BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_NUL_
+    /// Berachain:        BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_NUL_
+    /// Currently they are the same but they _might_ change in the future.
+    pub bls_dst: Option<String>,
     #[serde(default)]
     pub vault: Option<VaultSignerConfig>,
 
