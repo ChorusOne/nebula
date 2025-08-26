@@ -61,38 +61,34 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
                 // i just dropped it somewhere
                 let signable_data = V::vote_to_bytes(&vote, &self.chain_id)?;
                 let signature = self.signer.sign(&signable_data).unwrap();
-                // todo: go version also checked for non-zero-length vote extension sign bytes
-                // todo: go version also checked for non-nil block id
-                let extension_signable_data = V::vote_extension_to_bytes(&vote, &self.chain_id)?;
-                if vote.step == SignedMsgType::Precommit
-                    && !extension_signable_data.is_empty()
+                let ext_signature = if vote.step == SignedMsgType::Precommit
                     && vote
                         .block_id
                         .as_ref()
-                        .map(|id| !id.hash.is_empty())
-                        .unwrap_or(false)
+                        .map_or(false, |id| !id.hash.is_empty())
                 {
-                    info!("it's a precommit, we will sign the vote ext");
-                    let ext_signature = self.signer.sign(&extension_signable_data).unwrap();
+                    info!("it's a precommit with a non-nil block ID");
+                    let extension_signable_data =
+                        V::vote_extension_to_bytes(&vote, &self.chain_id)?;
+                    let ext_sig = self.signer.sign(&extension_signable_data).unwrap();
                     debug!(
                         "Extension signable data: {}",
                         hex::encode(&extension_signable_data)
                     );
-                    debug!("Extension signature: {}", hex::encode(&ext_signature));
-                    return Ok(Response::SignedVote(V::create_vote_response(
-                        Some(vote.clone()),
-                        signature,
-                        Some(ext_signature),
-                        None,
-                    )));
-                }
-                info!("no vote ext this time");
+                    debug!("Extension signature: {}", hex::encode(&ext_sig));
+                    Some(ext_sig)
+                } else {
+                    info!("no vote ext this time");
+                    None
+                };
+
                 debug!("Signature: {}", hex::encode(&signature));
                 debug!("Signable data: {}", hex::encode(&signable_data));
+
                 Response::SignedVote(V::create_vote_response(
                     Some(vote.clone()),
                     signature,
-                    None,
+                    ext_signature,
                     None,
                 ))
             }
