@@ -5,6 +5,7 @@ use log::info;
 use reqwest::blocking::{Client, ClientBuilder};
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde_json::Value;
+use std::fs;
 use std::time::Duration;
 
 use crate::backend::{PublicKey, SigningBackend};
@@ -30,20 +31,17 @@ impl TransitVaultSigner {
             .timeout(Duration::from_secs(10))
             .build()?;
 
-        let pub_key = Self::fetch_public_key(
-            &client,
-            &base_url,
-            &cfg.transit_path,
-            &cfg.key_name,
-            &cfg.token,
-        )?;
+        let token =
+            fs::read_to_string(cfg.token_file_path).expect("Unable to read token from file");
+        let pub_key =
+            Self::fetch_public_key(&client, &base_url, &cfg.transit_path, &cfg.key_name, &token)?;
 
         Ok(TransitVaultSigner {
             client,
             base_url,
             transit_path: cfg.transit_path,
             key_name: cfg.key_name,
-            token: cfg.token,
+            token: token,
             pub_key,
         })
     }

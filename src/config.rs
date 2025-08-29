@@ -48,6 +48,7 @@ pub struct ConnectionConfig {
 }
 
 impl Config {
+    // todo: change this to "new_from_file" and add validation
     pub fn from_file(path: &str) -> Result<Self, SignerError> {
         let contents = fs::read_to_string(path)?;
         let config: Config = toml::from_str(&contents)?;
@@ -92,7 +93,7 @@ impl Config {
                 SigningMode::VaultSignerPlugin | SigningMode::VaultTransit => SigningConfigs {
                     vault: Some(VaultSignerConfig {
                         address: "https://vault.example.com:8200".to_string(),
-                        token: "".to_string(),
+                        token_file_path: PathBuf::new(),
                         transit_path: "transit".to_string(),
                         key_name: "signing-key".to_string(),
                         cacert: None,
@@ -104,6 +105,10 @@ impl Config {
             },
         }
     }
+
+    // fn validate() -> Result<(), SignerError> {
+    //     Ok(())
+    // }
 
     pub fn write_to_file(&self, path: &str) -> Result<(), SignerError> {
         let toml_string = toml::to_string_pretty(self).expect("Unable to write config to file");
@@ -140,7 +145,7 @@ pub struct SigningConfigs {
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct VaultSignerConfig {
     pub address: String,
-    pub token: String,
+    pub token_file_path: PathBuf,
     pub transit_path: String,
     pub key_name: String,
     pub cacert: Option<String>,

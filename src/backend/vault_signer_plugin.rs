@@ -4,6 +4,7 @@ use log::{debug, info, trace};
 use reqwest::blocking::{Client, ClientBuilder};
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde_json::Value;
+use std::fs;
 use std::time::Duration;
 
 use crate::backend::{PublicKey, SigningBackend};
@@ -29,13 +30,11 @@ impl PluginVaultSigner {
             .timeout(Duration::from_secs(10))
             .build()?;
 
-        let pub_key = Self::fetch_public_key(
-            &client,
-            &base_url,
-            &cfg.transit_path,
-            &cfg.key_name,
-            &cfg.token,
-        )?;
+        let token =
+            fs::read_to_string(cfg.token_file_path).expect("Unable to read token from file");
+
+        let pub_key =
+            Self::fetch_public_key(&client, &base_url, &cfg.transit_path, &cfg.key_name, &token)?;
 
         if pub_key.key_type == crate::KeyType::Bls12381 && bls_dst.is_none() {
             return Err(SignerError::ConfigError(
@@ -48,7 +47,7 @@ impl PluginVaultSigner {
             base_url,
             mount_path: cfg.transit_path,
             key_name: cfg.key_name,
-            token: cfg.token,
+            token: token,
             pub_key,
             bls_dst,
         })
@@ -199,6 +198,8 @@ impl SigningBackend for PluginVaultSigner {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use crate::backend::vault_signer_plugin::PluginVaultSigner;
     use crate::config::VaultSignerConfig;
     use hex;
@@ -212,7 +213,7 @@ mod tests {
 
         let vault_config = VaultSignerConfig {
             address: "http://127.0.0.1:8200".to_string(),
-            token: "root".to_string(),
+            token_file_path: PathBuf::from("./root-token"),
             transit_path: "signer".to_string(),
             key_name: "test4".to_string(),
             skip_verify: false,
