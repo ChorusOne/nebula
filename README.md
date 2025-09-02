@@ -43,7 +43,7 @@ For node A, the signing flow looks identical to the one described above. Node B 
 failed signing vote err="signerEndpoint returned error #1: Would double-sign vote at same height/round" height=100 module=consensus round=1 vote={"block_id":{"hash":"41648E00251B1F6A94089BF7F4D942B640665325863F0D92E44D36AEBB604904","parts":{"hash":"DDCA7D5234BC6EB67F2E91E68CC22E434C3B2BA5D5D77CFAA44D9FC0D254AC5F","total":1}},"extension":null,"extension_signature":null,"height":"100","round":1,"signature":null,"timestamp":"2025-08-20T15:11:30.581382895Z","type":1,"validator_address":"0F38A435D89DF98B10BE57928BA79111D7440379","validator_index":23}
 ```
 
-This concludes the
+This concludes the signing request, and only one signature will be transmitted to a CometBFT node.
 
 
 ## Testing Strategy and Limitations
@@ -141,4 +141,4 @@ private key: UINHR9vYjWllyqYo+Jxc5fjYUBox3eRygj6dbUughIE=
 }
 ```
 
-In this case, `UINHR9vYjWllyqYo+Jxc5fjYUBox3eRygj6dbUughIE=` must be put under ./private_key.pem.
+In this case, `UINHR9vYjWllyqYo+Jxc5fjYUBox3eRygj6dbUughIE=` must be put under ./privkey.
