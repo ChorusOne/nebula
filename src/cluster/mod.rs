@@ -1,6 +1,6 @@
 mod storage;
 
-use crate::cluster::storage::RaftStorage;
+use crate::cluster::storage::RocksDBStorage;
 use crate::config::RaftConfig;
 use crate::error::SignerError;
 use crate::types::ConsensusData;
@@ -164,10 +164,10 @@ fn stdlog_to_slog() -> slog::Logger {
     slog::Logger::root(drain, o!())
 }
 
-fn create_storage(config: &RaftConfig) -> RaftStorage {
+fn create_storage(config: &RaftConfig) -> RocksDBStorage {
     let path = format!("{}_{}", config.data_path, config.node_id);
     info!("storage path: {}", path);
-    let mut storage = RaftStorage::new(&path);
+    let mut storage = RocksDBStorage::new(&path);
 
     let peer_ids: Vec<u64> = config.peers.iter().map(|p| p.id).collect();
     let init_state = storage.initial_state().unwrap();
@@ -182,7 +182,7 @@ fn create_storage(config: &RaftConfig) -> RaftStorage {
     storage
 }
 
-fn bootstrap_storage(storage: &mut RaftStorage, peer_ids: Vec<u64>, initial_state_path: &str) {
+fn bootstrap_storage(storage: &mut RocksDBStorage, peer_ids: Vec<u64>, initial_state_path: &str) {
     let mut snap = Snapshot::default();
     snap.mut_metadata().set_index(1);
     snap.mut_metadata().set_term(1);
@@ -308,7 +308,7 @@ fn start_outbound_handler(
 
 fn start_raft_thread(
     node_id: u64,
-    storage: RaftStorage,
+    storage: RocksDBStorage,
     logger: slog::Logger,
     in_rx: mpsc::Receiver<RaftMessage>,
     out_tx: Sender<RaftProtoMessage>,
@@ -375,7 +375,7 @@ fn start_raft_thread(
 }
 
 fn on_ready(
-    raft_group: &mut RawNode<RaftStorage>,
+    raft_group: &mut RawNode<RocksDBStorage>,
     signer_state: &Arc<RwLock<ConsensusData>>,
     net_tx: &Sender<RaftProtoMessage>,
     raft_state: &Arc<RwLock<(StateRole, u64)>>,
@@ -465,7 +465,7 @@ fn on_ready(
 }
 
 fn handle_committed_entries(
-    raft_group: &mut RawNode<RaftStorage>,
+    raft_group: &mut RawNode<RocksDBStorage>,
     committed_entries: Vec<raft_proto::eraftpb::Entry>,
     signer_state: &Arc<RwLock<ConsensusData>>,
     proposal_callbacks: &mut VecDeque<Sender<Result<(), SignerError>>>,

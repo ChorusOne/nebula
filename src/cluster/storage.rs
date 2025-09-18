@@ -15,16 +15,16 @@ fn entry_key(index: u64) -> Vec<u8> {
     format!("entry:{}", index).into_bytes()
 }
 
-pub struct RaftStorage {
+pub struct RocksDBStorage {
     db: DB,
 }
 
-impl RaftStorage {
+impl RocksDBStorage {
     pub fn new<P: AsRef<Path>>(path: P) -> Self {
         let mut opts = Options::default();
         opts.create_if_missing(true);
         let db = DB::open(&opts, path).expect("Failed to open RocksDB");
-        RaftStorage { db }
+        RocksDBStorage { db }
     }
 
     pub fn read_signer_state(&self) -> raft::Result<ConsensusData> {
@@ -108,7 +108,7 @@ impl RaftStorage {
     }
 }
 
-impl Storage for RaftStorage {
+impl Storage for RocksDBStorage {
     fn initial_state(&self) -> raft::Result<RaftState> {
         let hard_state = match self
             .db
