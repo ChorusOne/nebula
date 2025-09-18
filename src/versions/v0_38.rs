@@ -23,7 +23,7 @@ impl ProtocolVersion for VersionV0_38 {
         match msg.sum {
             Some(v0_38::privval::message::Sum::SignVoteRequest(req)) => {
                 let vote = req.vote.ok_or(SignerError::InvalidData)?;
-                info!("parsed vote extension: {:?}", vote.extension);
+                trace!("parsed vote extension: {:?}", vote.extension);
                 Ok((Request::SignVote(vote.try_into()?), req.chain_id))
             }
             Some(v0_38::privval::message::Sum::SignProposalRequest(req)) => {

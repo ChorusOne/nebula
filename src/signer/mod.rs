@@ -44,7 +44,7 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
         let response = match request {
             Request::SignProposal(proposal) => {
                 let signable_data = V::proposal_to_bytes(&proposal, &self.chain_id)?;
-                let signature = self.signer.sign(&signable_data).unwrap();
+                let signature = self.signer.sign(&signable_data)?;
                 debug!("Signature: {}", hex::encode(&signature));
                 debug!("Signable data: {}", hex::encode(&signable_data));
 
@@ -60,7 +60,7 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
                 // ^ actually it IS in the request and it IS in the canonical vote / proposal
                 // i just dropped it somewhere
                 let signable_data = V::vote_to_bytes(&vote, &self.chain_id)?;
-                let signature = self.signer.sign(&signable_data).unwrap();
+                let signature = self.signer.sign(&signable_data)?;
                 let ext_signature = if vote.step == SignedMsgType::Precommit
                     && vote
                         .block_id
@@ -70,7 +70,7 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
                     info!("it's a precommit with a non-nil block ID");
                     let extension_signable_data =
                         V::vote_extension_to_bytes(&vote, &self.chain_id)?;
-                    let ext_sig = self.signer.sign(&extension_signable_data).unwrap();
+                    let ext_sig = self.signer.sign(&extension_signable_data)?;
                     debug!(
                         "Extension signable data: {}",
                         hex::encode(&extension_signable_data)
@@ -93,7 +93,7 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
                 ))
             }
             Request::ShowPublicKey => {
-                let public_key = self.signer.public_key().unwrap();
+                let public_key = self.signer.public_key()?;
                 Response::PublicKey(V::create_pub_key_response(public_key))
             }
             Request::Ping => Response::Ping(V::create_ping_response()),

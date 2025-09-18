@@ -131,7 +131,7 @@ fn reconnect<V: ProtocolVersion>(
 
     loop {
         if !raft_node.is_leader() {
-            return Err(SignerError::Other("Leadership lost".into()));
+            return Err(SignerError::NotLeader("Leadership lost".into()));
         }
 
         *retry_count += 1;

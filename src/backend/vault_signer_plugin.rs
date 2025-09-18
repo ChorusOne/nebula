@@ -80,24 +80,25 @@ impl PluginVaultSigner {
 
         let data = resp
             .get("data")
-            .ok_or_else(|| SignerError::VaultError("missing data field".to_string()))?;
+            .ok_or_else(|| SignerError::InvalidPublicKey("missing data field".to_string()))?;
 
         let key_type = data["key_type"]
             .as_str()
-            .ok_or_else(|| SignerError::VaultError("invalid key type".to_string()))?;
+            .ok_or_else(|| SignerError::InvalidPublicKey("invalid key type".to_string()))?;
 
         let public_key_hex = data["public_key"]
             .as_str()
-            .ok_or_else(|| SignerError::VaultError("missing public_key field".to_string()))?;
+            .ok_or_else(|| SignerError::InvalidPublicKey("missing public_key field".to_string()))?;
 
-        let raw = hex::decode(public_key_hex).unwrap();
+        let raw = hex::decode(public_key_hex)
+            .map_err(|e| SignerError::InvalidPublicKey(e.to_string()))?;
 
         let expected_len = match key_type {
             "ed25519" => 32,
             "secp256k1" => 33,
             "bls12381" => 96,
             _ => {
-                return Err(SignerError::VaultError(format!(
+                return Err(SignerError::InvalidPublicKey(format!(
                     "unsupported key type: {}",
                     key_type
                 )));
@@ -105,7 +106,7 @@ impl PluginVaultSigner {
         };
 
         if raw.len() != expected_len {
-            return Err(SignerError::VaultError(format!(
+            return Err(SignerError::InvalidPublicKey(format!(
                 "unexpected {} public key length: {} (expected {})",
                 key_type,
                 raw.len(),
@@ -150,7 +151,7 @@ impl PluginVaultSigner {
 
         trace!("response from vault: {:#?}", resp);
         let raw_sig_field = resp["data"]["signature"].as_str().ok_or_else(|| {
-            SignerError::VaultError("Vault returned no signature field".to_string())
+            SignerError::VaultSigningError("Vault returned no signature field".to_string())
         })?;
 
         let parts: Vec<&str> = raw_sig_field.split(':').collect();
@@ -158,7 +159,7 @@ impl PluginVaultSigner {
         // standard vault transit response has 3 parts
         // secp256k1 signer has 4
         if parts.len() > 4 {
-            return Err(SignerError::VaultError(format!(
+            return Err(SignerError::VaultSigningError(format!(
                 "invalid Vault signature format: {}",
                 raw_sig_field
             )));
@@ -175,7 +176,7 @@ impl PluginVaultSigner {
         };
 
         if sig_bytes.len() != expected_sig_len {
-            return Err(SignerError::VaultError(format!(
+            return Err(SignerError::VaultSigningError(format!(
                 "unexpected signature length: {} (expected {})",
                 sig_bytes.len(),
                 expected_sig_len

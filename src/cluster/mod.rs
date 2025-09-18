@@ -92,9 +92,7 @@ impl SignerRaftNode {
             self.leader_id().unwrap(),
         );
         if !self.is_leader() {
-            return Err(SignerError::Other(
-                "This node is not the leader".to_string(),
-            ));
+            return Err(SignerError::NotLeader(self.node_id.to_string()));
         }
 
         let (tx, rx) = mpsc::channel();
@@ -115,7 +113,7 @@ impl SignerRaftNode {
             }
             Err(_) => {
                 warn!("replication timed out");
-                Err(SignerError::Other(
+                Err(SignerError::StateReplication(
                     "State replication timed out".to_string(),
                 ))
             }
@@ -140,7 +138,7 @@ impl SignerRaftNode {
     pub fn transfer_leadership(&self, transferee_id: u64) -> Result<(), SignerError> {
         info!("transferring leadership to node {}", transferee_id);
         if !self.is_leader() {
-            return Err(SignerError::Other(
+            return Err(SignerError::NotLeader(
                 "This node is not the leader, cannot transfer leadership".to_string(),
             ));
         }
@@ -399,7 +397,7 @@ fn on_ready(
                 proposal_callbacks.len()
             );
             for callback in proposal_callbacks.drain(..) {
-                let _ = callback.send(Err(SignerError::Other(
+                let _ = callback.send(Err(SignerError::NotLeader(
                     "Lost leadership during replication".into(),
                 )));
             }

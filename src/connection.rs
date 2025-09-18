@@ -16,7 +16,9 @@ pub fn open_secret_connection(
     loop {
         if !raft_node.is_leader() {
             warn!("Not the leader");
-            return Err(SignerError::TODO);
+            return Err(SignerError::NotLeader(
+                ("not leader while opening secret connection").into(),
+            ));
         }
         let socket = match TcpStream::connect(format!("{host}:{port}")) {
             Ok(s) => s,
