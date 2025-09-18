@@ -38,7 +38,7 @@ fn signer_with_mock_connection() {
     let request = signer.read_request().unwrap();
     assert!(matches!(request, Request::SignProposal(_)));
 
-    let response = signer.process_request(request).unwrap();
+    let response = signer.sign_request_and_build_response(request).unwrap();
 
     signer.send_response(response).unwrap();
 

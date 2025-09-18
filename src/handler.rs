@@ -79,7 +79,7 @@ impl<V: ProtocolVersion + Send + 'static> SigningHandler<V> {
                             Some(format!("Raft replication failed: {}", e)),
                         )))
                     } else {
-                        signer.process_request(Request::SignProposal(proposal))
+                        signer.sign_request_and_build_response(Request::SignProposal(proposal))
                     }
                 }
             }
@@ -127,12 +127,12 @@ impl<V: ProtocolVersion + Send + 'static> SigningHandler<V> {
                             Some(format!("Raft replication failed: {}", e)),
                         )))
                     } else {
-                        signer.process_request(Request::SignVote(vote))
+                        signer.sign_request_and_build_response(Request::SignVote(vote))
                     }
                 }
             }
 
-            other => signer.process_request(other),
+            other => signer.sign_request_and_build_response(other),
         }
     }
 

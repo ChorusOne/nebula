@@ -4,7 +4,7 @@ use crate::error::SignerError;
 use crate::proto::v0_38;
 use crate::protocol::{Request, Response};
 use crate::types::{BlockId, PartSetHeader, Proposal, SignedMsgType, Vote};
-use log::{info, trace};
+use log::trace;
 use prost::Message;
 
 // TODO: either keep chain_id here or add it to the domain Vote/Proposal
