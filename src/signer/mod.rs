@@ -66,7 +66,7 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
                     && vote
                         .block_id
                         .as_ref()
-                        .map_or(false, |id| !id.hash.is_empty())
+                        .is_some_and(|id| !id.hash.is_empty())
                 {
                     info!("it's a precommit with a non-nil block ID");
                     let extension_signable_data =

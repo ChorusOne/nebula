@@ -47,7 +47,7 @@ impl PluginVaultSigner {
             base_url,
             mount_path: cfg.transit_path,
             key_name: cfg.key_name,
-            token: token,
+            token,
             pub_key,
             bls_dst,
         })

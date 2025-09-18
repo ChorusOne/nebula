@@ -27,7 +27,7 @@ fn generate_ed25519(seed: &[u8; 32]) -> Result<()> {
     let pubkey = vk.to_bytes();
     let privkey_only = sk.to_bytes();
 
-    println!("private key: {}", STANDARD.encode(&privkey_only));
+    println!("private key: {}", STANDARD.encode(privkey_only));
 
     let mut privkey_full = privkey_only.to_vec();
     privkey_full.extend_from_slice(&pubkey);
@@ -39,7 +39,7 @@ fn generate_secp256k1(seed: &[u8; 32]) -> Result<()> {
     let sk = Secp256k1SigningKey::from_bytes(seed)?;
     let vk = sk.verifying_key();
 
-    println!("private key: {}", STANDARD.encode(&sk.to_bytes()));
+    println!("private key: {}", STANDARD.encode(sk.to_bytes()));
 
     output_tendermint_format("Secp256k1", &sk.to_bytes(), &vk.to_bytes())
 }
@@ -50,7 +50,7 @@ fn generate_bls12381(seed: &[u8; 32]) -> Result<()> {
         .map_err(|e| format!("BLS key generation failed: {:?}", e))?;
     let pk = sk.sk_to_pk();
 
-    println!("private key: {}", STANDARD.encode(&sk.to_bytes()));
+    println!("private key: {}", STANDARD.encode(sk.to_bytes()));
 
     output_tendermint_format("Bls12381", &sk.to_bytes(), &pk.to_bytes())
 }

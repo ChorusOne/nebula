@@ -144,7 +144,7 @@ fn reconnect<V: ProtocolVersion>(
         );
         thread::sleep(delay);
 
-        match signer::create_signer::<V>(host, port, identity_key, config, &raft_node) {
+        match signer::create_signer::<V>(host, port, identity_key, config, raft_node) {
             Ok(signer) => {
                 info!("Successfully reconnected to {}:{}", host, port);
                 *retry_count = 0;
