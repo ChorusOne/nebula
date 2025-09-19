@@ -10,11 +10,27 @@ The core principle of Nebula is that the decision to sign a block is treated as 
 
 A signature is only produced and transmitted *after* the state transition has been successfully committed to a quorum of nodes in the Raft cluster.
 
-There is only ONE signer (Raft leader) at a time that is capable of connecting to CometBFT nodes.
+There is only ONE signer (Raft leader) at a time that is capable of connecting to CometBFT nodes. (That is also enforced by the privval protocol)
 
 Nebula tries to err on the side of signing less, than actually signing more, so in turbulent leadership changes, uptime is expected to suffer slightly.
 
-Nebula connects to only one blockchain, with only one consensus key. That means you will need one instance per identity on a network.
+Nebula connects to only one blockchain node, with only one consensus key. That means you will need one instance per identity on a network.
+
+### Why I think it's correct
+
+In order to NOT double-sign, privval protocol requires a signer to track last signed state (HRS).
+Following this, a cluster of privval signers must always agree on the last signed HRS. If Nebula can achieve that, then it's safe.
+
+Raft provides a single, append-only, majority-agreed log with leader completeness and log matching; new leaders contain all committed entries, because a candidate cannot win an election unless its log is up to date.
+A log entry containing the HRS is considered committed once the leader that created the entry has replicated it on a majority of servers.
+Combining this with RocksDB's synchronous writes, it means that the "last signed HRS" is only advanced and sent to the CometBFT node when it is durably stored in a quorum.
+Leaders can crash, restart, or be replaced, but Raft guarantees that the new leader must include all committed entries in its log, so the recorded HRS cannot roll back.
+Thus the system never loses track of the last signed HRS, and double-signing cannot occur.
+
+
+#### Failure modes and the expected outcomes
+TODO. Is it needed though?
+
 
 ### Sequence of a Signing Request
 
