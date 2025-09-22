@@ -24,7 +24,7 @@ use config::{Config, PersistConfig, ProtocolVersionConfig};
 use connection::open_secret_connection;
 use log::{debug, error, info, warn};
 use persist::{Persist, PersistVariants};
-use protocol::{CheckedRequest, Request, ValidRequest};
+use protocol::{CheckedProposalRequest, CheckedVoteRequest, Request, ValidRequest};
 use signer::Signer;
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -175,24 +175,18 @@ fn process_request<T: SigningBackend, V: ProtocolVersion>(
 ) -> RequestProcessingAction<V> {
     match request {
         Request::Proposal(proposal) => match proposal.check(consensus_state) {
-            CheckedRequest::ValidRequest(request) => {
+            CheckedProposalRequest::ValidRequest(request) => {
                 RequestProcessingAction::PersistAndSign { request }
             }
-            CheckedRequest::DoubleSignProposal(cd) => RequestProcessingAction::ReplyWith(
+            CheckedProposalRequest::DoubleSignProposal(cd) => RequestProcessingAction::ReplyWith(
                 Response::SignedProposal(V::create_double_sign_prop_response(&cd)),
-            ),
-            CheckedRequest::DoubleSignVote(cd) => RequestProcessingAction::ReplyWith(
-                Response::SignedVote(V::create_double_sign_vote_response(&cd)),
             ),
         },
         Request::Vote(vote) => match vote.check(consensus_state) {
-            CheckedRequest::ValidRequest(request) => {
+            CheckedVoteRequest::ValidRequest(request) => {
                 RequestProcessingAction::PersistAndSign { request }
             }
-            CheckedRequest::DoubleSignProposal(cd) => RequestProcessingAction::ReplyWith(
-                Response::SignedProposal(V::create_double_sign_prop_response(&cd)),
-            ),
-            CheckedRequest::DoubleSignVote(cd) => RequestProcessingAction::ReplyWith(
+            CheckedVoteRequest::DoubleSignVote(cd) => RequestProcessingAction::ReplyWith(
                 Response::SignedVote(V::create_double_sign_vote_response(&cd)),
             ),
         },

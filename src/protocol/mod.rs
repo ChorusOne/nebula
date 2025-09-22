@@ -10,8 +10,11 @@ pub enum Request {
     Vote(Vote),
 }
 
-pub enum CheckedRequest {
+pub enum CheckedVoteRequest {
     DoubleSignVote(ConsensusData),
+    ValidRequest(ValidRequest),
+}
+pub enum CheckedProposalRequest {
     DoubleSignProposal(ConsensusData),
     ValidRequest(ValidRequest),
 }
@@ -31,30 +34,30 @@ pub enum Response<P, V, K, G> {
 }
 
 impl Vote {
-    pub fn check(self, state: &ConsensusData) -> CheckedRequest {
+    pub fn check(self, state: &ConsensusData) -> CheckedVoteRequest {
         let req_state = ConsensusData {
             height: self.height,
             round: self.round,
             step: self.step,
         };
         if should_sign_vote(state, &self) {
-            CheckedRequest::ValidRequest(ValidRequest::Vote(self))
+            CheckedVoteRequest::ValidRequest(ValidRequest::Vote(self))
         } else {
-            CheckedRequest::DoubleSignVote(req_state)
+            CheckedVoteRequest::DoubleSignVote(req_state)
         }
     }
 }
 impl Proposal {
-    pub fn check(self, state: &ConsensusData) -> CheckedRequest {
+    pub fn check(self, state: &ConsensusData) -> CheckedProposalRequest {
         let req_state = ConsensusData {
             height: self.height,
             round: self.round,
             step: self.step,
         };
         if should_sign_proposal(state, &self) {
-            CheckedRequest::ValidRequest(ValidRequest::Proposal(self))
+            CheckedProposalRequest::ValidRequest(ValidRequest::Proposal(self))
         } else {
-            CheckedRequest::DoubleSignProposal(req_state)
+            CheckedProposalRequest::DoubleSignProposal(req_state)
         }
     }
 }
