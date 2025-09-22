@@ -158,7 +158,7 @@ impl ProtocolVersion for VersionV1_0 {
             vote: None,
             error: Some(v1::privval::RemoteSignerError {
                 code: 1,
-                description: format!("Would double-sign vote at height/round/step {}/{}/{}", cd.height, cd.round, cd.step),
+                description: format!("Would double-sign vote at height/round/step {}/{}/{:?}", cd.height, cd.round, cd.step),
             }),
         }
     }
@@ -168,7 +168,7 @@ impl ProtocolVersion for VersionV1_0 {
             proposal: None,
             error: Some(v1::privval::RemoteSignerError {
                 code: 1,
-                description: format!("Would double-sign proposal at height/round/step {}/{}/{}", cd.height, cd.round, cd.step),
+                description: format!("Would double-sign proposal at height/round/step {}/{}/{:?}", cd.height, cd.round, cd.step),
             }),
         }
     }

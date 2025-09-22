@@ -35,7 +35,7 @@ impl Vote {
         let req_state = ConsensusData {
             height: self.height,
             round: self.round,
-            step: self.step as u8,
+            step: self.step,
         };
         if should_sign_vote(state, &self) {
             CheckedRequest::ValidRequest(ValidRequest::Vote(self))
@@ -49,7 +49,7 @@ impl Proposal {
         let req_state = ConsensusData {
             height: self.height,
             round: self.round,
-            step: self.step as u8,
+            step: self.step,
         };
         if should_sign_proposal(state, &self) {
             CheckedRequest::ValidRequest(ValidRequest::Proposal(self))
@@ -73,8 +73,8 @@ fn should_sign_proposal(state: &ConsensusData, proposal: &Proposal) -> bool {
     }
 
     info!(
-        "checking if proposal should be signed, state: {}, proposal: {}/{}/{}",
-        state, proposal.height, proposal.round, proposal.step as u8
+        "checking if proposal should be signed, state: {}, proposal: {}/{}/{:?}",
+        state, proposal.height, proposal.round, proposal.step
     );
     match (
         proposal.height.cmp(&state.height),
@@ -106,8 +106,8 @@ In other words, a vote should only be signed if it’s:
 */
 fn should_sign_vote(state: &ConsensusData, vote: &Vote) -> bool {
     info!(
-        "checking if vote should be signed, state: {}, vote: {}/{}/{}",
-        state, vote.height, vote.round, vote.step as u8
+        "checking if vote should be signed, state: {}, vote: {}/{}/{:?}",
+        state, vote.height, vote.round, vote.step
     );
     let vote_step = vote.step;
     match (
@@ -171,7 +171,7 @@ fn should_sign_proposal_logic() {
     let mut state = ConsensusData {
         height: 10,
         round: 1,
-        step: SignedMsgType::Proposal as u8,
+        step: SignedMsgType::Proposal,
     };
 
     let p1 = Proposal {
@@ -213,7 +213,7 @@ fn should_sign_proposal_logic() {
     };
     assert!(!should_sign_proposal(&state, &p5));
 
-    state.step = SignedMsgType::Prevote as u8;
+    state.step = SignedMsgType::Prevote;
     assert!(!should_sign_proposal(&state, &p3));
 }
 
@@ -222,7 +222,7 @@ fn should_sign_vote_logic() {
     let state = ConsensusData {
         height: 10,
         round: 1,
-        step: SignedMsgType::Proposal as u8,
+        step: SignedMsgType::Proposal,
     };
     let block_id = Some(crate::types::BlockId {
         hash: vec![1],
@@ -268,14 +268,14 @@ fn should_sign_vote_logic() {
     let state_after_prevote = ConsensusData {
         height: 10,
         round: 1,
-        step: SignedMsgType::Prevote as u8,
+        step: SignedMsgType::Prevote,
     };
     assert!(should_sign_vote(&state_after_prevote, &v4));
 
     let state_after_precommit = ConsensusData {
         height: 10,
         round: 1,
-        step: SignedMsgType::Precommit as u8,
+        step: SignedMsgType::Precommit,
     };
     assert!(!should_sign_vote(&state_after_precommit, &v4));
 

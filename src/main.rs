@@ -18,6 +18,7 @@ use crate::backend::{
 use crate::config::SigningMode;
 use crate::error::SignerError;
 use crate::protocol::Response;
+use crate::types::SignedMsgType;
 use cluster::SignerRaftNode;
 use config::{Config, PersistConfig, ProtocolVersionConfig};
 use connection::open_secret_connection;
@@ -63,7 +64,7 @@ fn main() -> Result<(), SignerError> {
                 persist::LocalState::new(&ConsensusData {
                     height: 0,
                     round: 0,
-                    step: 0,
+                    step: SignedMsgType::Unknown,
                 }),
             )))
         }

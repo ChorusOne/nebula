@@ -194,12 +194,12 @@ fn happy_path_signing_on_stable_cluster() {
         let state = node.signer_state.read().unwrap();
         assert_eq!(state.height, 100);
         assert_eq!(state.round, 0);
-        assert_eq!(state.step, SignedMsgType::Proposal as u8);
+        assert_eq!(state.step, SignedMsgType::Proposal);
     }
     let leader_state = leader.lock().unwrap().state();
     assert_eq!(leader_state.height, 100);
     assert_eq!(leader_state.round, 0);
-    assert_eq!(leader_state.step, SignedMsgType::Proposal as u8);
+    assert_eq!(leader_state.step, SignedMsgType::Proposal);
 }
 
 // In reality this will not happen, because it's the leader who initiates the connection.

@@ -24,17 +24,11 @@ impl ProtocolVersion for VersionV0_38 {
             Some(v0_38::privval::message::Sum::SignVoteRequest(req)) => {
                 let vote = req.vote.ok_or(SignerError::InvalidData)?;
                 info!("parsed vote extension: {:?}", vote.extension);
-                Ok((
-                    Request::Vote(vote.try_into()?),
-                    req.chain_id,
-                ))
+                Ok((Request::Vote(vote.try_into()?), req.chain_id))
             }
             Some(v0_38::privval::message::Sum::SignProposalRequest(req)) => {
                 let proposal = req.proposal.ok_or(SignerError::InvalidData)?;
-                Ok((
-                    Request::Proposal(proposal.try_into()?),
-                    req.chain_id,
-                ))
+                Ok((Request::Proposal(proposal.try_into()?), req.chain_id))
             }
             Some(v0_38::privval::message::Sum::PubKeyRequest(req)) => {
                 Ok((Request::ShowPublicKey, req.chain_id))
@@ -157,7 +151,10 @@ impl ProtocolVersion for VersionV0_38 {
             vote: None,
             error: Some(v0_38::privval::RemoteSignerError {
                 code: 1,
-                description: format!("Would double-sign vote at height/round/step {}/{}/{}", cd.height, cd.round, cd.step),
+                description: format!(
+                    "Would double-sign vote at height/round/step {}/{}/{:?}",
+                    cd.height, cd.round, cd.step
+                ),
             }),
         }
     }
@@ -166,7 +163,10 @@ impl ProtocolVersion for VersionV0_38 {
             proposal: None,
             error: Some(v0_38::privval::RemoteSignerError {
                 code: 1,
-                description: format!("Would double-sign proposal at height/round/step {}/{}/{}", cd.height, cd.round, cd.step),
+                description: format!(
+                    "Would double-sign proposal at height/round/step {}/{}/{:?}",
+                    cd.height, cd.round, cd.step
+                ),
             }),
         }
     }
@@ -243,7 +243,14 @@ impl ProtocolVersion for VersionV0_38 {
         v0_38::privval::PingResponse {}
     }
 
-    fn create_error_response(message: &str) -> Response<Self::ProposalResponse, Self::VoteResponse, Self::PubKeyResponse, Self::PingResponse> {
+    fn create_error_response(
+        message: &str,
+    ) -> Response<
+        Self::ProposalResponse,
+        Self::VoteResponse,
+        Self::PubKeyResponse,
+        Self::PingResponse,
+    > {
         Response::SignedProposal(v0_38::privval::SignedProposalResponse {
             proposal: None,
             error: Some(v0_38::privval::RemoteSignerError {

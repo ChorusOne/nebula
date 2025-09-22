@@ -34,7 +34,7 @@ fn signer_with_mock_connection() {
     let p = persist::LocalState::new(&ConsensusData {
         height: 0,
         round: 0,
-        step: 0,
+        step: 0.into(),
     });
     let mut req_bytes = Vec::new();
     msg.encode_length_delimited(&mut req_bytes).unwrap();
