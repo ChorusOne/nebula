@@ -10,11 +10,48 @@ The core principle of Nebula is that the decision to sign a block is treated as 
 
 A signature is only produced and transmitted *after* the state transition has been successfully committed to a quorum of nodes in the Raft cluster.
 
-There is only ONE signer (Raft leader) at a time that is capable of connecting to CometBFT nodes.
+There is only ONE signer (Raft leader) at a time that is capable of connecting to CometBFT nodes. (That is also enforced by the privval protocol)
 
 Nebula tries to err on the side of signing less, than actually signing more, so in turbulent leadership changes, uptime is expected to suffer slightly.
 
-Nebula connects to only one blockchain, with only one consensus key. That means you will need one instance per identity on a network.
+Nebula connects to only one blockchain node, with only one consensus key. That means you will need one instance per identity on a network.
+
+### Why it's correct
+
+Nebula prevents double-signing by ensuring these four properties:
+
+In order to not double-sign, privval protocol requires a signer to reliably track last signed state (HRS). Here's how we achieve it.
+
+#### HRS validation logic
+
+[CometBFT documentation](https://docs.cometbft.com/main/spec/consensus/signing) states clearly when a signer should sign an incoming consensus message.
+
+We reject any request that violates CometBFT's consensus rules.
+
+#### Handling only one request at any given time
+
+Nebula uses a mutex which is locked when entering the replication/signing sequence, to make it easier to reason about the signing process.
+
+
+#### The cluster always agrees on latest HRS
+
+Raft's leader completeness property ensures all nodes see the same committed HRS sequence.
+When leadership changes occur, the new leader must contain all previously committed entries.
+
+Leaders can crash, restart, or be replaced, but Raft guarantees that the new leader must include all committed entries in its log, so the recorded HRS cannot roll back.
+
+#### HRS state is durably persisted
+
+A log entry containing the HRS is considered committed once the leader that created the entry has replicated it on a majority of servers.
+
+Adding RocksDB's synchronous writes, it means that the "last signed HRS" is only advanced when it's been durably stored in a quorum.
+
+#### Signing only occurs after persisting the state
+
+The signature is sent to the CometBFT node only after it's been replicated, so in a case of a failure during replication, the signer does not advance.
+
+Since we never sign without first recording the new HRS durably across a majority, and Raft + RocksDB guarantee this state cannot be lost or rolled back, double-signing should be impossible.
+
 
 ### Sequence of a Signing Request
 
