@@ -90,6 +90,17 @@ fn should_sign_proposal(state: &ConsensusData, proposal: &Proposal) -> bool {
     }
 }
 
+fn valid_step_transition(state: &ConsensusData, step: SignedMsgType) -> bool {
+    // have signed proposal, got asked to sign prevote
+    if state.step == SignedMsgType::Proposal && step == SignedMsgType::Prevote {
+        return true;
+    }
+    // have NOT signed precommit, got asked to sign precommit
+    if state.step != SignedMsgType::Precommit && step == SignedMsgType::Precommit {
+        return true;
+    }
+    false
+}
 /*
 A signer should only sign a vote v if any of the following lines are true:
 
@@ -109,32 +120,15 @@ fn should_sign_vote(state: &ConsensusData, vote: &Vote) -> bool {
         "checking if vote should be signed, state: {}, vote: {}/{}/{:?}",
         state, vote.height, vote.round, vote.step
     );
-    let vote_step = vote.step;
-    match (
-        vote.height.cmp(&state.height),
-        vote.round.cmp(&state.round),
-        vote_step,
-        state.step.into(),
-    ) {
-        // (1)
-        (Ordering::Greater, _, _, _) => true,
-
-        // (2)
-        (Ordering::Equal, Ordering::Greater, _, _) => true,
-
-        // (3)
-        (Ordering::Equal, Ordering::Equal, SignedMsgType::Prevote, SignedMsgType::Proposal) => true,
-
-        // (4)
-        (Ordering::Equal, Ordering::Equal, SignedMsgType::Precommit, stp)
-            if stp != SignedMsgType::Precommit =>
-        {
-            true
-        }
-
-        // everything else: don't sign
-        _ => false,
-    }
+    return match vote.height.cmp(&state.height) {
+        Ordering::Greater => true,
+        Ordering::Less => false,
+        Ordering::Equal => match vote.round.cmp(&state.round) {
+            Ordering::Greater => true,
+            Ordering::Less => false,
+            Ordering::Equal => valid_step_transition(state, vote.step),
+        },
+    };
 }
 
 /*
@@ -288,4 +282,83 @@ fn should_sign_vote_logic() {
         ..Default::default()
     };
     assert!(!should_sign_vote(&state, &v5));
+}
+
+#[test]
+fn test_step_transition_proposal() {
+    let state = ConsensusData {
+        height: 10,
+        round: 1,
+        step: SignedMsgType::Proposal,
+    };
+    assert_eq!(valid_step_transition(&state, SignedMsgType::Prevote), true);
+    // moving to pre-commit is always valid from non-precommit states
+    assert_eq!(
+        valid_step_transition(&state, SignedMsgType::Precommit),
+        true
+    );
+    assert_eq!(valid_step_transition(&state, SignedMsgType::Unknown), false);
+    assert_eq!(
+        valid_step_transition(&state, SignedMsgType::Proposal),
+        false
+    );
+}
+
+#[test]
+fn test_step_transition_precommit() {
+    let state = ConsensusData {
+        height: 10,
+        round: 1,
+        step: SignedMsgType::Precommit,
+    };
+    // moving from pre-commit is never allowed
+    assert_eq!(
+        valid_step_transition(&state, SignedMsgType::Precommit),
+        false
+    );
+    assert_eq!(valid_step_transition(&state, SignedMsgType::Prevote), false);
+    assert_eq!(valid_step_transition(&state, SignedMsgType::Unknown), false);
+    assert_eq!(
+        valid_step_transition(&state, SignedMsgType::Proposal),
+        false
+    );
+}
+
+#[test]
+fn test_step_transition_unknown() {
+    let state = ConsensusData {
+        height: 10,
+        round: 1,
+        step: SignedMsgType::Unknown,
+    };
+    // can only transition to precommit
+    assert_eq!(
+        valid_step_transition(&state, SignedMsgType::Precommit),
+        true
+    );
+    assert_eq!(valid_step_transition(&state, SignedMsgType::Prevote), false);
+    assert_eq!(valid_step_transition(&state, SignedMsgType::Unknown), false);
+    assert_eq!(
+        valid_step_transition(&state, SignedMsgType::Proposal),
+        false
+    );
+}
+
+#[test]
+fn test_step_transition_prevote() {
+    let state = ConsensusData {
+        height: 10,
+        round: 1,
+        step: SignedMsgType::Prevote,
+    };
+    assert_eq!(
+        valid_step_transition(&state, SignedMsgType::Precommit),
+        true
+    );
+    assert_eq!(valid_step_transition(&state, SignedMsgType::Prevote), false);
+    assert_eq!(valid_step_transition(&state, SignedMsgType::Unknown), false);
+    assert_eq!(
+        valid_step_transition(&state, SignedMsgType::Proposal),
+        false
+    );
 }
