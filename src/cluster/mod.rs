@@ -165,9 +165,8 @@ fn stdlog_to_slog() -> slog::Logger {
 }
 
 fn create_storage(config: &RaftConfig) -> RocksDBStorage {
-    let path = format!("{}_{}", config.data_path, config.node_id);
-    info!("storage path: {}", path);
-    let mut storage = RocksDBStorage::new(&path);
+    info!("storage path: {}", config.data_path);
+    let mut storage = RocksDBStorage::new(&config.data_path);
 
     let peer_ids: Vec<u64> = config.peers.iter().map(|p| p.id).collect();
     let init_state = storage.initial_state().unwrap();
