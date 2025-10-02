@@ -49,10 +49,34 @@ impl Persist for LocalState {
             .map_err(|_| PersistError::InvalidState("Could not convert CD to JSON".to_string()))?;
         let tmp_path = self.path.with_extension("tmp");
 
-        std::fs::write(&tmp_path, serialized.as_bytes())
+        {
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(&tmp_path)
+                .map_err(|e| PersistError::CouldNotPersist(e.to_string()))?;
+
+            std::io::Write::write_all(&mut file, serialized.as_bytes())
+                .map_err(|e| PersistError::CouldNotPersist(e.to_string()))?;
+            file.sync_all()
+                .map_err(|e| PersistError::CouldNotPersist(e.to_string()))?;
+        }
+
+        std::fs::rename(&tmp_path, &self.path)
             .map_err(|e| PersistError::CouldNotPersist(e.to_string()))?;
-        std::fs::rename(tmp_path, &self.path)
-            .map_err(|e| PersistError::CouldNotPersist(e.to_string()))?;
+
+        if let Some(parent) = self.path.parent() {
+            let dir = std::fs::File::open(parent)
+                .map_err(|e| PersistError::CouldNotPersist(e.to_string()))?;
+            dir.sync_all()
+                .map_err(|e| PersistError::CouldNotPersist(e.to_string()))?;
+        } else {
+            return Err(PersistError::InvalidState(
+                "No parent directory for persistence path".to_string(),
+            ));
+        }
+
         self.state = new_cd;
         Ok(PersistedRequest(request))
     }

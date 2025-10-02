@@ -39,7 +39,7 @@ fn signer_with_mock_connection() {
         step: 0.into(),
     };
 
-    let cd_path = "asd";
+    let cd_path = "./asd";
     std::fs::write(
         cd_path,
         &serde_json::to_string(&initial_cd).unwrap().as_bytes(),
