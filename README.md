@@ -1,6 +1,9 @@
 # Nebula - the CometBFT Remote signer, written in Rust
 
 # NOTE: THIS IS AN ALPHA VERSION OF THE SIGNER!
+As of 2025-10-02, Nebula is used in a setup of one signer connected to two validators on the XPLA network.
+
+Validator identity: https://www.mintscan.io/xpla/validators/xplavaloper14yeq3lkajldaggj28hmq8xng9xux7x5g80w747
 
 Nebula is a CometBFT remote signer. It uses Raft to create a cluster of signer nodes that collectively maintain the signature high water mark.
 
@@ -18,9 +21,7 @@ Nebula connects to only one blockchain node, with only one consensus key. That m
 
 ### Why it's correct
 
-Nebula prevents double-signing by ensuring these four properties:
-
-In order to not double-sign, privval protocol requires a signer to reliably track last signed state (HRS). Here's how we achieve it.
+In order to not double-sign, privval protocol requires a signer to reliably track last signed state (HRS). Here's how we achieve it:
 
 #### HRS validation logic
 
