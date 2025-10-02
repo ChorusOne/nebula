@@ -3,23 +3,33 @@ mod cluster;
 mod config;
 mod connection;
 mod error;
-mod handler;
 mod keygen;
-mod leader;
+mod persist;
 mod proto;
 mod protocol;
-mod safeguards;
 mod signer;
 mod types;
 mod versions;
 
-use crate::{error::SignerError, types::KeyType};
+use crate::backend::SigningBackend;
+use crate::error::SignerError;
+use crate::protocol::Response;
 use clap::{Parser as _, Subcommand};
 use cluster::SignerRaftNode;
-use config::{Config, ProtocolVersionConfig};
-use log::{error, info, warn};
+use config::{Config, PersistConfig, ProtocolVersionConfig};
+use log::{debug, error, info, warn};
+use persist::{Persist, PersistVariants};
+use protocol::{CheckedProposalRequest, CheckedVoteRequest, Request, ValidRequest};
+use signer::Signer;
+use std::io::{Read, Write};
+use std::net::TcpStream;
 use std::str::FromStr;
-use versions::{VersionV0_34, VersionV0_37, VersionV0_38, VersionV1_0};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
+use tendermint_p2p::secret_connection::SecretConnection;
+use types::{ConsensusData, KeyType};
+use versions::{ProtocolVersion, VersionV0_34, VersionV0_37, VersionV0_38, VersionV1_0};
 
 #[derive(clap::Parser)]
 #[command(name = "signer")]
@@ -101,37 +111,216 @@ fn main() -> Result<(), SignerError> {
 fn start_signer(config: Config) -> Result<(), SignerError> {
     info!("Chain ID: {}", config.chain_id);
     info!("Protocol version: {:?}", config.version);
-    info!("Node ID: {}", config.raft.node_id);
-
-    let raft_node = SignerRaftNode::new(config.raft.clone());
+    let state_persist: Arc<Mutex<PersistVariants>> = match &config.persist {
+        PersistConfig::Raft { raft } => {
+            info!("Node ID: {}", raft.node_id);
+            Arc::new(Mutex::new(PersistVariants::Raft(SignerRaftNode::new(
+                raft.clone(),
+            ))))
+        }
+        PersistConfig::Local { local } => {
+            info!("Local persistence path: {:?}", local.path);
+            Arc::new(Mutex::new(PersistVariants::Local(
+                persist::LocalState::from_file(&local.path).expect("Failed to read local state"),
+            )))
+        }
+    };
 
     loop {
-        leader::wait_for_leader(&raft_node);
+        let result = match config.version {
+            ProtocolVersionConfig::V0_34 => run_leader::<VersionV0_34>(&config, &state_persist),
+            ProtocolVersionConfig::V0_37 => run_leader::<VersionV0_37>(&config, &state_persist),
+            ProtocolVersionConfig::V0_38 => run_leader::<VersionV0_38>(&config, &state_persist),
+            ProtocolVersionConfig::V1_0 => run_leader::<VersionV1_0>(&config, &state_persist),
+        };
 
-        if raft_node.is_leader() {
-            info!("This node ({}) is now the leader!", config.raft.node_id);
+        match result {
+            Ok(()) => warn!("Leader loop exited normally"),
+            Err(e) => error!("Leader loop error: {}", e),
+        }
+    }
+}
 
-            let result = match config.version {
-                ProtocolVersionConfig::V0_34 => {
-                    leader::run_leader::<VersionV0_34>(&config, &raft_node)
-                }
-                ProtocolVersionConfig::V0_37 => {
-                    leader::run_leader::<VersionV0_37>(&config, &raft_node)
-                }
-                ProtocolVersionConfig::V0_38 => {
-                    leader::run_leader::<VersionV0_38>(&config, &raft_node)
-                }
-                ProtocolVersionConfig::V1_0 => {
-                    leader::run_leader::<VersionV1_0>(&config, &raft_node)
-                }
-            };
+// TODO: bring this back?
+fn wait_for_leader(raft_node: &Arc<SignerRaftNode>) {
+    while raft_node.leader_id().is_none() {
+        thread::sleep(Duration::from_millis(200));
+    }
+    info!("Current leader: {}", raft_node.leader_id().unwrap());
+}
 
-            match result {
-                Ok(()) => warn!("Leader loop exited normally"),
-                Err(e) => error!("Leader loop error: {}", e),
+// TODO: bring this back?
+fn wait_as_follower(raft_node: &Arc<SignerRaftNode>) {
+    info!("This node is a follower, standing by…");
+    while !raft_node.is_leader() {
+        thread::sleep(Duration::from_secs(1));
+        if let Some(leader) = raft_node.leader_id() {
+            info!("Leader is: {}", leader);
+        }
+    }
+}
+
+fn run_leader<V: ProtocolVersion + Send + 'static>(
+    config: &Config,
+    persist: &Arc<Mutex<PersistVariants>>,
+) -> Result<(), SignerError> {
+    info!(
+        "Running leader loop for {} connections",
+        config.connections.len()
+    );
+
+    let config = Arc::new(config.clone());
+
+    let handles: Vec<_> = config
+        .connections
+        .iter()
+        .map(|conn| {
+            let config = Arc::clone(&config);
+            let p = Arc::clone(persist);
+            let host = conn.host.clone();
+            let port = conn.port;
+
+            info!("connecting to {host}:{port}");
+            thread::spawn(move || handle_connection::<V>(host, port, config, p))
+        })
+        .collect();
+
+    for handle in handles {
+        if let Err(e) = handle.join().expect("Handler thread panicked") {
+            error!("Connection handler error: {}", e);
+        }
+    }
+
+    Ok(())
+}
+
+fn handle_connection<V: ProtocolVersion + Send + 'static>(
+    host: String,
+    port: u16,
+    config: Arc<Config>,
+    persist: Arc<Mutex<PersistVariants>>,
+) -> Result<(), SignerError> {
+    let mut retry_count = 0;
+    let identity_key = ed25519_consensus::SigningKey::new(rand_core::OsRng);
+
+    let mut signer = crate::signer::create_signer::<V>(&host, port, &identity_key, &config)?;
+
+    loop {
+        let response = handle_single_request(&mut signer, &persist);
+        if let Err(ref e) = response {
+            error!("Error handling request from {}:{} - {}", host, port, e);
+            match reconnect::<V>(&host, port, &identity_key, &config, &mut retry_count) {
+                Ok(new_signer) => signer = new_signer,
+                Err(_) => continue,
             }
         } else {
-            leader::wait_as_follower(&raft_node);
+            retry_count = 0;
+        }
+    }
+}
+
+enum RequestProcessingAction<V: ProtocolVersion> {
+    PersistAndSign { request: ValidRequest },
+    ReplyWith(Response<V::ProposalResponse, V::VoteResponse, V::PubKeyResponse, V::PingResponse>),
+    ShowPublicKey,
+}
+
+fn process_request<T: SigningBackend, V: ProtocolVersion>(
+    request: Request,
+    consensus_state: &ConsensusData,
+) -> RequestProcessingAction<V> {
+    match request {
+        Request::Proposal(proposal) => match proposal.check(consensus_state) {
+            CheckedProposalRequest::ValidRequest(request) => {
+                RequestProcessingAction::PersistAndSign { request }
+            }
+            CheckedProposalRequest::DoubleSignProposal(cd) => RequestProcessingAction::ReplyWith(
+                Response::SignedProposal(V::create_double_sign_prop_response(&cd)),
+            ),
+        },
+        Request::Vote(vote) => match vote.check(consensus_state) {
+            CheckedVoteRequest::ValidRequest(request) => {
+                RequestProcessingAction::PersistAndSign { request }
+            }
+            CheckedVoteRequest::DoubleSignVote(cd) => RequestProcessingAction::ReplyWith(
+                Response::SignedVote(V::create_double_sign_vote_response(&cd)),
+            ),
+        },
+        Request::ShowPublicKey => RequestProcessingAction::ShowPublicKey,
+        Request::Ping => {
+            RequestProcessingAction::ReplyWith(Response::Ping(V::create_ping_response()))
+        }
+    }
+}
+
+pub fn handle_single_request<T: SigningBackend, V: ProtocolVersion, C: Read + Write>(
+    signer: &mut Signer<T, V, C>,
+    persist: &Arc<Mutex<PersistVariants>>,
+) -> Result<(), SignerError> {
+    let start = std::time::Instant::now();
+    let request = signer.read_request()?;
+
+    info!("Received request after {:?}", start.elapsed());
+    debug!("Request: {request:?}");
+    let start = std::time::Instant::now();
+    let mut guard = persist.lock().unwrap();
+    let consensus_state = guard.state();
+
+    let action = process_request::<T, V>(request, &consensus_state);
+    let response = match action {
+        RequestProcessingAction::PersistAndSign { request } => match guard.persist(request) {
+            Err(e) => {
+                error!("Could not persist state: {e:?}");
+                V::create_error_response(&format!("Cannot persist new consensus state: {e:?}"))
+            }
+            Ok(persisted) => signer.sign(persisted)?,
+        },
+        RequestProcessingAction::ReplyWith(response) => response,
+        RequestProcessingAction::ShowPublicKey => {
+            let public_key = signer.public_key()?;
+            Response::PublicKey(V::create_pub_key_response(&public_key))
+        }
+    };
+
+    info!("Processing request took: {:?}", start.elapsed());
+    let start = std::time::Instant::now();
+
+    debug!("Sending response to validator");
+    signer.send_response(response)?;
+    drop(guard);
+    info!("Sending the response took: {:?}", start.elapsed());
+    Ok(())
+}
+
+fn reconnect<V: ProtocolVersion>(
+    host: &str,
+    port: u16,
+    identity_key: &ed25519_consensus::SigningKey,
+    config: &Config,
+    retry_count: &mut u32,
+) -> Result<Signer<Box<dyn SigningBackend>, V, SecretConnection<TcpStream>>, SignerError> {
+    const MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
+
+    loop {
+        *retry_count += 1;
+        let delay =
+            Duration::from_millis(100 * 2_u64.pow((*retry_count).min(10))).min(MAX_RETRY_DELAY);
+
+        warn!(
+            "Reconnection attempt {} for {}:{} in {:?}",
+            retry_count, host, port, delay
+        );
+        thread::sleep(delay);
+
+        match crate::signer::create_signer::<V>(host, port, identity_key, config) {
+            Ok(signer) => {
+                info!("Successfully reconnected to {}:{}", host, port);
+                *retry_count = 0;
+                return Ok(signer);
+            }
+            Err(e) => {
+                error!("Reconnection failed for {}:{} - {}", host, port, e);
+            }
         }
     }
 }

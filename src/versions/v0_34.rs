@@ -3,7 +3,7 @@ use crate::error::SignerError;
 use super::ProtocolVersion;
 use crate::backend::PublicKey;
 use crate::protocol::{Request, Response};
-use crate::types::{Proposal, Vote};
+use crate::types::{ConsensusData, Proposal, Vote};
 
 pub struct VersionV0_34;
 
@@ -37,28 +37,38 @@ impl ProtocolVersion for VersionV0_34 {
         todo!("v0.34")
     }
 
+    fn create_double_sign_vote_response(_cd: &ConsensusData) -> Self::VoteResponse {
+        todo!()
+    }
+
+    fn create_double_sign_prop_response(_cd: &ConsensusData) -> Self::ProposalResponse {
+        todo!()
+    }
+
     fn create_proposal_response(
-        _proposal: Option<Proposal>,
+        _proposal: &Proposal,
         _signature: Vec<u8>,
-        _error: Option<String>,
     ) -> Self::ProposalResponse {
         todo!()
     }
 
     fn create_vote_response(
-        _vote: Option<Vote>,
+        _vote: &Vote,
         _signature: Vec<u8>,
         _ext_signature: Option<Vec<u8>>,
-        _error: Option<String>,
     ) -> Self::VoteResponse {
         todo!()
     }
 
-    fn create_pub_key_response(_pub_key: PublicKey) -> Self::PubKeyResponse {
+    fn create_pub_key_response(_pub_key: &PublicKey) -> Self::PubKeyResponse {
         todo!()
     }
 
     fn create_ping_response() -> Self::PingResponse {
+        todo!()
+    }
+
+    fn create_error_response(_message: &str) -> Response<Self::ProposalResponse, Self::VoteResponse, Self::PubKeyResponse, Self::PingResponse> {
         todo!()
     }
 

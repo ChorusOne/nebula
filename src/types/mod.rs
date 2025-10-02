@@ -1,4 +1,4 @@
-use crate::SignerError;
+use crate::{SignerError, protocol::ValidRequest};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -173,14 +173,31 @@ impl From<KeyType> for String {
 pub struct ConsensusData {
     pub height: i64,
     pub round: i64,
-    pub step: u8,
+    pub step: SignedMsgType,
+}
+
+impl From<&ValidRequest> for ConsensusData {
+    fn from(value: &ValidRequest) -> Self {
+        match value {
+            ValidRequest::Vote(v) => Self {
+                height: v.height,
+                round: v.round,
+                step: v.step,
+            },
+            ValidRequest::Proposal(p) => Self {
+                height: p.height,
+                round: p.round,
+                step: p.step,
+            },
+        }
+    }
 }
 
 impl std::fmt::Display for ConsensusData {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "ConsensusData {}/{}/{}",
+            "ConsensusData {}/{}/{:?}",
             self.height, self.round, self.step
         )
     }

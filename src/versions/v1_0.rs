@@ -3,7 +3,7 @@ use crate::backend::PublicKey;
 use crate::error::SignerError;
 use crate::proto::v1;
 use crate::protocol::{Request, Response};
-use crate::types::{BlockId, PartSetHeader, Proposal, SignedMsgType, Vote};
+use crate::types::{BlockId, ConsensusData, PartSetHeader, Proposal, SignedMsgType, Vote};
 use log::trace;
 use prost::Message;
 
@@ -25,14 +25,16 @@ impl ProtocolVersion for VersionV1_0 {
             Some(v1::privval::message::Sum::SignVoteRequest(req)) => {
                 let vote = req.vote.ok_or(SignerError::InvalidData)?;
                 Ok((
-                    Request::SignVote(tendermint_vote_to_domain(vote)?),
+                    Request::Vote(tendermint_vote_to_domain(vote)?),
                     req.chain_id,
                 ))
             }
             Some(v1::privval::message::Sum::SignProposalRequest(req)) => {
                 let proposal = req.proposal.ok_or(SignerError::InvalidData)?;
                 Ok((
-                    Request::SignProposal(tendermint_proposal_to_domain(proposal)?),
+                    Request::Proposal(tendermint_proposal_to_domain(
+                        proposal,
+                    )?),
                     req.chain_id,
                 ))
             }
@@ -151,18 +153,34 @@ impl ProtocolVersion for VersionV1_0 {
         Ok(bytes)
     }
 
-    fn create_proposal_response(
-        proposal: Option<Proposal>,
-        signature: Vec<u8>,
-        error: Option<String>,
-    ) -> Self::ProposalResponse {
+    fn create_double_sign_vote_response(cd: &ConsensusData) -> Self::VoteResponse {
+        v1::privval::SignedVoteResponse {
+            vote: None,
+            error: Some(v1::privval::RemoteSignerError {
+                code: 1,
+                description: format!("Would double-sign vote at height/round/step {}/{}/{:?}", cd.height, cd.round, cd.step),
+            }),
+        }
+    }
+
+    fn create_double_sign_prop_response(cd: &ConsensusData) -> Self::ProposalResponse {
         v1::privval::SignedProposalResponse {
-            proposal: proposal.map(|proposal| v1::types::Proposal {
+            proposal: None,
+            error: Some(v1::privval::RemoteSignerError {
+                code: 1,
+                description: format!("Would double-sign proposal at height/round/step {}/{}/{:?}", cd.height, cd.round, cd.step),
+            }),
+        }
+    }
+
+    fn create_proposal_response(proposal: &Proposal, signature: Vec<u8>) -> Self::ProposalResponse {
+        v1::privval::SignedProposalResponse {
+            proposal: Some(v1::types::Proposal {
                 r#type: proposal.step as i32,
                 height: proposal.height,
                 round: proposal.round as i32,
                 pol_round: proposal.pol_round as i32,
-                block_id: proposal.block_id.map(|id| v1::types::BlockId {
+                block_id: proposal.block_id.clone().map(|id| v1::types::BlockId {
                     hash: id.hash.into(),
                     part_set_header: id.parts.map(|p| v1::types::PartSetHeader {
                         total: p.total,
@@ -175,52 +193,55 @@ impl ProtocolVersion for VersionV1_0 {
                 }),
                 signature: signature.into(),
             }),
-            error: error.map(|desc| v1::privval::RemoteSignerError {
-                code: 1,
-                description: desc,
-            }),
+            error: None,
         }
     }
 
     fn create_vote_response(
-        vote: Option<Vote>,
+        vote: &Vote,
         signature: Vec<u8>,
         ext_signature: Option<Vec<u8>>,
-        error: Option<String>,
     ) -> Self::VoteResponse {
         v1::privval::SignedVoteResponse {
-            vote: vote.map(|vote| crate::proto::v1::types::Vote {
+            vote: Some(crate::proto::v1::types::Vote {
                 r#type: vote.step.into(),
                 height: vote.height,
                 round: vote.round as i32,
-                block_id: vote.block_id.map(|id| id.into()),
+                block_id: vote.block_id.clone().map(|id| id.into()),
                 timestamp: vote.timestamp.map(|t| prost_types::Timestamp {
                     seconds: t / 1_000_000_000,
                     nanos: (t % 1_000_000_000) as i32,
                 }),
-                validator_address: vote.validator_address.into(),
+                validator_address: vote.validator_address.clone().into(),
                 validator_index: vote.validator_index,
                 signature: signature.into(),
-                extension: vote.extension.into(),
+                extension: vote.extension.clone().into(),
                 extension_signature: ext_signature.unwrap_or_default().into(),
             }),
-            error: error.map(|desc| v1::privval::RemoteSignerError {
-                code: 1,
-                description: desc,
-            }),
+            error: None,
         }
     }
 
-    fn create_pub_key_response(pub_key: PublicKey) -> Self::PubKeyResponse {
+    fn create_pub_key_response(pub_key: &PublicKey) -> Self::PubKeyResponse {
         v1::privval::PubKeyResponse {
             error: None,
-            pub_key_bytes: pub_key.bytes.into(),
-            pub_key_type: pub_key.key_type.into(),
+            pub_key_bytes: pub_key.bytes.clone().into(),
+            pub_key_type: pub_key.key_type.clone().into(),
         }
     }
 
     fn create_ping_response() -> Self::PingResponse {
         v1::privval::PingResponse {}
+    }
+
+    fn create_error_response(message: &str) -> Response<Self::ProposalResponse, Self::VoteResponse, Self::PubKeyResponse, Self::PingResponse> {
+        Response::SignedProposal(v1::privval::SignedProposalResponse {
+            proposal: None,
+            error: Some(v1::privval::RemoteSignerError {
+                code: 1,
+                description: message.to_string(),
+            }),
+        })
     }
 }
 fn tendermint_vote_to_domain(vote: v1::types::Vote) -> Result<Vote, SignerError> {

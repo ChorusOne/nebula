@@ -1,5 +1,7 @@
 use thiserror::Error;
 
+use crate::persist;
+
 #[derive(Debug, Error)]
 pub enum SignerError {
     #[error("IO error: {0}")]
@@ -56,13 +58,19 @@ pub enum SignerError {
     #[error("Todo: signing: {0}")]
     Crypto(String),
 
+    #[error("Failed to persist data")]
+    PersistError,
     #[error("Invalid public key: {0}")]
     InvalidPublicKey(String),
-
     #[error("Config validation error: {0}")]
     ConfigError(String),
 }
 
+impl From<persist::PersistError> for SignerError {
+    fn from(_: persist::PersistError) -> Self {
+        SignerError::PersistError
+    }
+}
 impl From<base64::DecodeError> for SignerError {
     fn from(_b64_error: base64::DecodeError) -> SignerError {
         SignerError::InvalidData // possibly invalid data? but i'd like to convey in the error what kind of data did we wanna decode

@@ -19,6 +19,18 @@ pub struct RaftConfig {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct LocalConfig {
+    pub path: PathBuf,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(tag = "persist", rename_all = "snake_case")]
+pub enum PersistConfig {
+    Local { local: LocalConfig },
+    Raft { raft: RaftConfig },
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Config {
     pub log_level: String,
     pub chain_id: String,
@@ -26,7 +38,8 @@ pub struct Config {
     pub connections: Vec<ConnectionConfig>,
     pub signing_mode: SigningMode,
 
-    pub raft: RaftConfig,
+    #[serde(flatten)]
+    pub persist: PersistConfig,
 
     #[serde(default)]
     pub signing: SigningConfigs,
@@ -71,15 +84,17 @@ impl Config {
                 },
             ],
             signing_mode: backend.clone(),
-            raft: RaftConfig {
-                node_id: 1,
-                bind_addr: "127.0.0.1:8080".to_string(),
-                data_path: "./raft_data".to_string(),
-                peers: vec![PeerConfig {
-                    id: 1,
-                    addr: "127.0.0.1:8080".into(),
-                }],
-                initial_state_path: "./initial_state.json".to_string(),
+            persist: PersistConfig::Raft {
+                raft: RaftConfig {
+                    node_id: 1,
+                    bind_addr: "127.0.0.1:8080".to_string(),
+                    data_path: "./raft_data".to_string(),
+                    peers: vec![PeerConfig {
+                        id: 1,
+                        addr: "127.0.0.1:8080".into(),
+                    }],
+                    initial_state_path: "./initial_state.json".to_string(),
+                },
             },
             signing: match backend {
                 SigningMode::Native => SigningConfigs {

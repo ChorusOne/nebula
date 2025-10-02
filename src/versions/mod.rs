@@ -1,6 +1,6 @@
 use crate::backend::PublicKey;
 use crate::protocol::{Request, Response};
-use crate::types::{Proposal, Vote};
+use crate::types::{ConsensusData, Proposal, Vote};
 
 pub mod v0_34;
 pub mod v0_37;
@@ -32,17 +32,22 @@ pub trait ProtocolVersion {
     fn proposal_to_bytes(proposal: &Proposal, chain_id: &str) -> Result<Vec<u8>, SignerError>;
     fn vote_to_bytes(vote: &Vote, chain_id: &str) -> Result<Vec<u8>, SignerError>;
     fn vote_extension_to_bytes(vote: &Vote, chain_id: &str) -> Result<Vec<u8>, SignerError>;
-    fn create_proposal_response(
-        proposal: Option<Proposal>,
-        signature: Vec<u8>,
-        error: Option<String>,
-    ) -> Self::ProposalResponse;
+    fn create_proposal_response(proposal: &Proposal, signature: Vec<u8>) -> Self::ProposalResponse;
+    fn create_double_sign_prop_response(cd: &ConsensusData) -> Self::ProposalResponse;
+    fn create_double_sign_vote_response(cd: &ConsensusData) -> Self::VoteResponse;
     fn create_vote_response(
-        vote: Option<Vote>,
+        vote: &Vote,
         signature: Vec<u8>,
         extension_signature: Option<Vec<u8>>,
-        error: Option<String>,
     ) -> Self::VoteResponse;
-    fn create_pub_key_response(pub_key: PublicKey) -> Self::PubKeyResponse;
+    fn create_pub_key_response(pub_key: &PublicKey) -> Self::PubKeyResponse;
     fn create_ping_response() -> Self::PingResponse;
+    fn create_error_response(
+        message: &str,
+    ) -> Response<
+        Self::ProposalResponse,
+        Self::VoteResponse,
+        Self::PubKeyResponse,
+        Self::PingResponse,
+    >;
 }

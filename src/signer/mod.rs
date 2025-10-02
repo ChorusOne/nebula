@@ -1,9 +1,10 @@
+use crate::backend::PublicKey;
 use crate::backend::SigningBackend;
-use crate::cluster::SignerRaftNode;
 use crate::config::Config;
 use crate::connection::open_secret_connection;
 use crate::error::SignerError;
-use crate::protocol::{Request, Response};
+use crate::persist::PersistedRequest;
+use crate::protocol::{Request, Response, ValidRequest};
 use crate::types::{BufferError, SignedMsgType};
 use crate::versions::ProtocolVersion;
 use log::{debug, info};
@@ -11,7 +12,6 @@ use prost::Message as _;
 use std::io::{Read, Write};
 use std::marker::PhantomData;
 use std::net::TcpStream;
-use std::sync::Arc;
 use tendermint_p2p::secret_connection::SecretConnection;
 
 pub struct Signer<T: SigningBackend, V: ProtocolVersion, C: Read + Write> {
@@ -33,40 +33,36 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
         }
     }
 
-    // TODO: the signing and sending sig should be split further maybe?
-    //
-    pub fn sign_request_and_build_response(
+    pub fn public_key(&self) -> Result<PublicKey, SignerError> {
+        self.signer.public_key()
+    }
+
+    pub fn sign(
         &mut self,
-        request: Request,
+        request: PersistedRequest,
     ) -> Result<
         Response<V::ProposalResponse, V::VoteResponse, V::PubKeyResponse, V::PingResponse>,
         SignerError,
     > {
-        let response = match request {
-            Request::SignProposal(proposal) => {
+        match request.0 {
+            ValidRequest::Proposal(proposal) => {
                 let signable_data = V::proposal_to_bytes(&proposal, &self.chain_id)?;
                 let signature = self.signer.sign(&signable_data)?;
                 debug!("Signature: {}", hex::encode(&signature));
                 debug!("Signable data: {}", hex::encode(&signable_data));
 
-                Response::SignedProposal(V::create_proposal_response(
-                    Some(proposal.clone()),
-                    signature,
-                    None,
-                ))
+                let response = V::create_proposal_response(&proposal, signature);
+                Ok(Response::SignedProposal(response))
             }
-            Request::SignVote(vote) => {
+            ValidRequest::Vote(vote) => {
                 // TODO: chain id should be parsed from the request, and compared to what we're expecting
                 // ^ no chain_id in the request. if we configure wrong chain_id in the config
                 // ^ actually it IS in the request and it IS in the canonical vote / proposal
                 // i just dropped it somewhere
                 let signable_data = V::vote_to_bytes(&vote, &self.chain_id)?;
                 let signature = self.signer.sign(&signable_data)?;
-                let ext_signature = if vote.step == SignedMsgType::Precommit
-                    && vote
-                        .block_id
-                        .as_ref()
-                        .is_some_and(|id| !id.hash.is_empty())
+                if vote.step == SignedMsgType::Precommit
+                    && vote.block_id.as_ref().is_some_and(|id| !id.hash.is_empty())
                 {
                     info!("it's a precommit with a non-nil block ID");
                     let extension_signable_data =
@@ -77,30 +73,16 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
                         hex::encode(&extension_signable_data)
                     );
                     debug!("Extension signature: {}", hex::encode(&ext_sig));
-                    Some(ext_sig)
-                } else {
-                    info!("no vote ext this time");
-                    None
-                };
-
+                    let response = V::create_vote_response(&vote, signature, Some(ext_sig));
+                    return Ok(Response::SignedVote(response));
+                }
+                info!("no vote ext this time");
                 debug!("Signature: {}", hex::encode(&signature));
                 debug!("Signable data: {}", hex::encode(&signable_data));
-
-                Response::SignedVote(V::create_vote_response(
-                    Some(vote.clone()),
-                    signature,
-                    ext_signature,
-                    None,
-                ))
+                let response = V::create_vote_response(&vote, signature, None);
+                Ok(Response::SignedVote(response))
             }
-            Request::ShowPublicKey => {
-                let public_key = self.signer.public_key()?;
-                Response::PublicKey(V::create_pub_key_response(public_key))
-            }
-            Request::Ping => Response::Ping(V::create_ping_response()),
-        };
-
-        Ok(response)
+        }
     }
 
     pub fn read_request(&mut self) -> Result<Request, SignerError> {
@@ -167,7 +149,6 @@ pub fn create_signer<V: ProtocolVersion>(
     port: u16,
     identity_key: &ed25519_consensus::SigningKey,
     config: &Config,
-    raft_node: &Arc<SignerRaftNode>,
 ) -> Result<Signer<Box<dyn SigningBackend>, V, SecretConnection<TcpStream>>, SignerError> {
     info!("Connecting to CometBFT at {}:{}", host, port);
 
@@ -176,7 +157,6 @@ pub fn create_signer<V: ProtocolVersion>(
         port,
         identity_key.clone(),
         tendermint_p2p::secret_connection::Version::V0_34,
-        raft_node,
     )?;
 
     let backend = crate::backend::create_backend(config)?;
