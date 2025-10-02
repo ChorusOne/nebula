@@ -14,7 +14,6 @@ mod versions;
 use crate::backend::SigningBackend;
 use crate::error::SignerError;
 use crate::protocol::Response;
-use crate::types::SignedMsgType;
 use clap::{Parser as _, Subcommand};
 use cluster::SignerRaftNode;
 use config::{Config, PersistConfig, ProtocolVersionConfig};
@@ -122,11 +121,7 @@ fn start_signer(config: Config) -> Result<(), SignerError> {
         PersistConfig::Local { local } => {
             info!("Local persistence path: {:?}", local.path);
             Arc::new(Mutex::new(PersistVariants::Local(
-                persist::LocalState::new(&ConsensusData {
-                    height: 0,
-                    round: 0,
-                    step: SignedMsgType::Unknown,
-                }),
+                persist::LocalState::from_file(&local.path).expect("Failed to read local state"),
             )))
         }
     };

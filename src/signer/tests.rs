@@ -1,11 +1,13 @@
 use super::mock_connection::MockCometBFTConnection;
 use crate::backend::Ed25519Signer;
+use crate::persist::LocalState;
 use crate::proto::v0_38;
 use crate::signer::Signer;
 use crate::types::{ConsensusData, SignedMsgType};
 use crate::versions::VersionV0_38;
 use crate::{handle_single_request, persist};
 use prost::Message;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -31,11 +33,20 @@ fn signer_with_mock_connection() {
             proposal_req,
         )),
     };
-    let p = persist::LocalState::new(&ConsensusData {
+    let initial_cd = ConsensusData {
         height: 0,
         round: 0,
         step: 0.into(),
-    });
+    };
+
+    let cd_path = "asd";
+    std::fs::write(
+        cd_path,
+        &serde_json::to_string(&initial_cd).unwrap().as_bytes(),
+    )
+    .unwrap();
+    let p = LocalState::from_file(&PathBuf::from(cd_path)).unwrap();
+
     let mut req_bytes = Vec::new();
     msg.encode_length_delimited(&mut req_bytes).unwrap();
 
