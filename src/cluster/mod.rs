@@ -12,14 +12,14 @@ use slog::{Drain, o};
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::mpsc::{self, RecvTimeoutError, Sender};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 
-enum RaftMessage {
+pub enum RaftMessage {
     Propose(ConsensusData, Sender<Result<(), SignerError>>),
     Msg(RaftProtoMessage),
     TransferLeadership(u64),
@@ -55,16 +55,26 @@ impl SignerRaftNode {
     }
 
     pub fn new(config: RaftConfig) -> Self {
-        let logger = stdlog_to_slog();
-        let storage = create_storage(&config);
-        let signer_state = Arc::new(RwLock::new(storage.read_signer_state().unwrap()));
-
-        let (in_tx, in_rx) = mpsc::channel::<RaftMessage>();
         let (out_tx, out_rx) = mpsc::channel::<RaftProtoMessage>();
-        let raft_state = Arc::new(RwLock::new((StateRole::Follower, 0)));
+        let (in_tx, in_rx) = mpsc::channel::<RaftMessage>();
 
         start_inbound_handler(config.bind_addr.clone(), in_tx.clone());
         start_outbound_handler(out_rx, config.peers.clone(), config.node_id);
+
+        Self::from_channels(config, (in_tx, in_rx), out_tx)
+    }
+
+    pub fn from_channels(
+        config: RaftConfig,
+        inc: (Sender<RaftMessage>, Receiver<RaftMessage>),
+        out_tx: Sender<RaftProtoMessage>,
+    ) -> Self {
+        let logger = stdlog_to_slog();
+        let storage = create_storage(&config);
+        let signer_state = Arc::new(RwLock::new(storage.read_signer_state().unwrap()));
+        let (in_tx, in_rx) = inc;
+
+        let raft_state = Arc::new(RwLock::new((StateRole::Follower, 0)));
 
         let handle = start_raft_thread(
             config.node_id,
