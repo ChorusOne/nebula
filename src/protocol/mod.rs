@@ -142,7 +142,7 @@ fn should_sign_vote(state: &ConsensusData, vote: &Vote) -> bool {
         "checking if vote should be signed, state: {}, vote: {}/{}/{:?}",
         state, vote.height, vote.round, vote.step
     );
-    return match vote.height.cmp(&state.height) {
+    match vote.height.cmp(&state.height) {
         Ordering::Greater => true,
         Ordering::Less => false,
         Ordering::Equal => match vote.round.cmp(&state.round) {
@@ -150,7 +150,7 @@ fn should_sign_vote(state: &ConsensusData, vote: &Vote) -> bool {
             Ordering::Less => false,
             Ordering::Equal => valid_step_transition(state, vote.step),
         },
-    };
+    }
 }
 
 /*

@@ -214,34 +214,25 @@ fn start_inbound_handler(bind_addr: String, in_tx: Sender<RaftMessage>) {
         let listener = TcpListener::bind(&bind_addr)
             .unwrap_or_else(|_| panic!("bind failed on {}", bind_addr));
         info!("listening on {}", bind_addr);
-        for conn in listener.incoming() {
-            if let Ok(stream) = conn {
-                // stream
-                //     .set_read_timeout(Some(Duration::from_secs(1)))
-                //     .expect("failed to set read timeout on raft stream");
-                let in_tx = in_tx.clone();
-                thread::spawn(move || {
-                    let mut reader = BufReader::new(stream);
-                    loop {
-                        let len = match reader.read_u32::<BigEndian>() {
-                            Ok(l) => l as usize,
-                            Err(_) => break,
-                        };
-                        let mut buf = vec![0; len];
-                        if reader.read_exact(&mut buf).is_err() {
-                            break;
-                        }
-                        match RaftProtoMessage::parse_from_bytes(&buf) {
-                            Ok(msg) => {
-                                if in_tx.send(RaftMessage::Msg(msg)).is_err() {
-                                    break;
-                                }
-                            }
-                            Err(e) => warn!("parse error: {:?}", e),
-                        }
+        for stream in listener.incoming().flatten() {
+            let in_tx = in_tx.clone();
+            thread::spawn(move || {
+                let mut reader = BufReader::new(stream);
+                while let Ok(len) = reader.read_u32::<BigEndian>() {
+                    let mut buf = vec![0; len as usize];
+                    if reader.read_exact(&mut buf).is_err() {
+                        break;
                     }
-                });
-            }
+                    match RaftProtoMessage::parse_from_bytes(&buf) {
+                        Ok(msg) => {
+                            if in_tx.send(RaftMessage::Msg(msg)).is_err() {
+                                break;
+                            }
+                        }
+                        Err(e) => warn!("parse error: {:?}", e),
+                    }
+                }
+            });
         }
     });
 }

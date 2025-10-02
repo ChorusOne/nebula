@@ -17,7 +17,7 @@ use crate::protocol::Response;
 use clap::{Parser as _, Subcommand};
 use cluster::SignerRaftNode;
 use config::{Config, PersistConfig, ProtocolVersionConfig};
-use log::{debug, error, info, warn};
+use log::{LevelFilter, debug, error, info, warn};
 use persist::{Persist, PersistVariants};
 use protocol::{CheckedProposalRequest, CheckedVoteRequest, Request, ValidRequest};
 use signer::Signer;
@@ -73,9 +73,7 @@ fn main() -> Result<(), SignerError> {
         Commands::Start { config_path } => {
             let config = Config::from_file(&config_path)?;
             env_logger::Builder::new()
-                .filter_level(
-                    log::LevelFilter::from_str(&config.log_level).unwrap_or(log::LevelFilter::Info),
-                )
+                .filter_level(LevelFilter::from_str(&config.log_level).unwrap_or(LevelFilter::Info))
                 .init();
             start_signer(config)
         }
@@ -127,6 +125,8 @@ fn start_signer(config: Config) -> Result<(), SignerError> {
     };
 
     loop {
+        // TODO: don't connect if we are not the master; it will block the master from connecting
+        // and we need to close the connection on leadership loss
         let result = match config.version {
             ProtocolVersionConfig::V0_34 => run_leader::<VersionV0_34>(&config, &state_persist),
             ProtocolVersionConfig::V0_37 => run_leader::<VersionV0_37>(&config, &state_persist),
@@ -137,25 +137,6 @@ fn start_signer(config: Config) -> Result<(), SignerError> {
         match result {
             Ok(()) => warn!("Leader loop exited normally"),
             Err(e) => error!("Leader loop error: {}", e),
-        }
-    }
-}
-
-// TODO: bring this back?
-fn wait_for_leader(raft_node: &Arc<SignerRaftNode>) {
-    while raft_node.leader_id().is_none() {
-        thread::sleep(Duration::from_millis(200));
-    }
-    info!("Current leader: {}", raft_node.leader_id().unwrap());
-}
-
-// TODO: bring this back?
-fn wait_as_follower(raft_node: &Arc<SignerRaftNode>) {
-    info!("This node is a follower, standing by…");
-    while !raft_node.is_leader() {
-        thread::sleep(Duration::from_secs(1));
-        if let Some(leader) = raft_node.leader_id() {
-            info!("Leader is: {}", leader);
         }
     }
 }
