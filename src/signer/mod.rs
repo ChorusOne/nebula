@@ -1,5 +1,7 @@
 use crate::backend::PublicKey;
 use crate::backend::SigningBackend;
+use crate::config::Config;
+use crate::connection::open_secret_connection;
 use crate::error::SignerError;
 use crate::persist::PersistedRequest;
 use crate::protocol::{Request, Response, ValidRequest};
@@ -9,6 +11,8 @@ use log::{debug, info};
 use prost::Message as _;
 use std::io::{Read, Write};
 use std::marker::PhantomData;
+use std::net::TcpStream;
+use tendermint_p2p::secret_connection::SecretConnection;
 
 pub struct Signer<T: SigningBackend, V: ProtocolVersion, C: Read + Write> {
     signer: T,
@@ -43,7 +47,7 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
         match request.0 {
             ValidRequest::Proposal(proposal) => {
                 let signable_data = V::proposal_to_bytes(&proposal, &self.chain_id)?;
-                let signature = self.signer.sign(&signable_data).unwrap();
+                let signature = self.signer.sign(&signable_data)?;
                 debug!("Signature: {}", hex::encode(&signature));
                 debug!("Signable data: {}", hex::encode(&signable_data));
 
@@ -56,26 +60,20 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
                 // ^ actually it IS in the request and it IS in the canonical vote / proposal
                 // i just dropped it somewhere
                 let signable_data = V::vote_to_bytes(&vote, &self.chain_id)?;
-                let signature = self.signer.sign(&signable_data).unwrap();
-                // todo: go version also checked for non-zero-length vote extension sign bytes
-                // todo: go version also checked for non-nil block id
-                let extension_signable_data = V::vote_extension_to_bytes(&vote, &self.chain_id)?;
+                let signature = self.signer.sign(&signable_data)?;
                 if vote.step == SignedMsgType::Precommit
-                    && !extension_signable_data.is_empty()
-                    && vote
-                        .block_id
-                        .as_ref()
-                        .map(|id| !id.hash.is_empty())
-                        .unwrap_or(false)
+                    && vote.block_id.as_ref().is_some_and(|id| !id.hash.is_empty())
                 {
-                    info!("it's a precommit, we will sign the vote ext");
-                    let ext_signature = self.signer.sign(&extension_signable_data).unwrap();
+                    info!("it's a precommit with a non-nil block ID");
+                    let extension_signable_data =
+                        V::vote_extension_to_bytes(&vote, &self.chain_id)?;
+                    let ext_sig = self.signer.sign(&extension_signable_data)?;
                     debug!(
                         "Extension signable data: {}",
                         hex::encode(&extension_signable_data)
                     );
-                    debug!("Extension signature: {}", hex::encode(&ext_signature));
-                    let response = V::create_vote_response(&vote, signature, Some(ext_signature));
+                    debug!("Extension signature: {}", hex::encode(&ext_sig));
+                    let response = V::create_vote_response(&vote, signature, Some(ext_sig));
                     return Ok(Response::SignedVote(response));
                 }
                 info!("no vote ext this time");
@@ -144,6 +142,26 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
         self.connection.flush()?;
         Ok(())
     }
+}
+
+pub fn create_signer<V: ProtocolVersion>(
+    host: &str,
+    port: u16,
+    identity_key: &ed25519_consensus::SigningKey,
+    config: &Config,
+) -> Result<Signer<Box<dyn SigningBackend>, V, SecretConnection<TcpStream>>, SignerError> {
+    info!("Connecting to CometBFT at {}:{}", host, port);
+
+    let conn = open_secret_connection(
+        host,
+        port,
+        identity_key.clone(),
+        tendermint_p2p::secret_connection::Version::V0_34,
+    )?;
+
+    let backend = crate::backend::create_backend(config)?;
+
+    Ok(Signer::new(backend, conn, config.chain_id.clone()))
 }
 
 #[cfg(test)]

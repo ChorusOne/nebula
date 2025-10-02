@@ -3,6 +3,7 @@ mod cluster;
 mod config;
 mod connection;
 mod error;
+mod keygen;
 mod persist;
 mod proto;
 mod protocol;
@@ -10,18 +11,13 @@ mod signer;
 mod types;
 mod versions;
 
-use crate::backend::vault_signer_plugin::PluginVaultSigner;
-use crate::backend::{
-    Bls12381Signer, Ed25519Signer, Secp256k1Signer, SigningBackend,
-    vault_transit::TransitVaultSigner,
-};
-use crate::config::SigningMode;
+use crate::backend::SigningBackend;
 use crate::error::SignerError;
 use crate::protocol::Response;
 use crate::types::SignedMsgType;
+use clap::{Parser as _, Subcommand};
 use cluster::SignerRaftNode;
 use config::{Config, PersistConfig, ProtocolVersionConfig};
-use connection::open_secret_connection;
 use log::{debug, error, info, warn};
 use persist::{Persist, PersistVariants};
 use protocol::{CheckedProposalRequest, CheckedVoteRequest, Request, ValidRequest};
@@ -36,19 +32,84 @@ use tendermint_p2p::secret_connection::SecretConnection;
 use types::{ConsensusData, KeyType};
 use versions::{ProtocolVersion, VersionV0_34, VersionV0_37, VersionV0_38, VersionV1_0};
 
+#[derive(clap::Parser)]
+#[command(name = "signer")]
+#[command(about = "A distributed CometBFT remote signer")]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    Start {
+        #[arg(short, long = "config")]
+        config_path: String,
+    },
+    Init {
+        #[arg(short, long)]
+        output_path: String,
+
+        #[arg(short, long)]
+        backend: config::SigningMode,
+    },
+    Keys {
+        #[command(subcommand)]
+        command: KeysCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum KeysCommands {
+    Generate {
+        #[arg(long, value_enum)]
+        key_type: types::KeyType,
+    },
+}
+
 fn main() -> Result<(), SignerError> {
-    let config_path = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| "config.toml".to_string());
-    let config = Config::from_file(&config_path)?;
+    let cli = Cli::parse();
 
-    env_logger::Builder::new()
-        .filter_level(
-            log::LevelFilter::from_str(&config.log_level).unwrap_or(log::LevelFilter::Info),
-        )
-        .init();
+    match cli.command {
+        Commands::Start { config_path } => {
+            let config = Config::from_file(&config_path)?;
+            env_logger::Builder::new()
+                .filter_level(
+                    log::LevelFilter::from_str(&config.log_level).unwrap_or(log::LevelFilter::Info),
+                )
+                .init();
+            start_signer(config)
+        }
+        Commands::Init {
+            output_path,
+            backend,
+        } => {
+            let default_config = Config::default_config(backend);
+            default_config.write_to_file(&output_path)?;
+            println!("Generated default configuration at '{}'", output_path);
+            Ok(())
+        }
+        Commands::Keys { command } => {
+            match command {
+                KeysCommands::Generate { key_type } => {
+                    let key_type_str = match key_type {
+                        KeyType::Ed25519 => "ed25519",
+                        KeyType::Secp256k1 => "secp256k1",
+                        KeyType::Bls12381 => "bls12381",
+                    };
 
-    info!("Loading config from: {}", config_path);
+                    if let Err(e) = keygen::generate_keys(key_type_str) {
+                        eprintln!("Key generation failed: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
+fn start_signer(config: Config) -> Result<(), SignerError> {
     info!("Chain ID: {}", config.chain_id);
     info!("Protocol version: {:?}", config.version);
     let state_persist: Arc<Mutex<PersistVariants>> = match &config.persist {
@@ -147,7 +208,7 @@ fn handle_connection<V: ProtocolVersion + Send + 'static>(
     let mut retry_count = 0;
     let identity_key = ed25519_consensus::SigningKey::new(rand_core::OsRng);
 
-    let mut signer = create_signer::<V>(&host, port, &identity_key, &config)?;
+    let mut signer = crate::signer::create_signer::<V>(&host, port, &identity_key, &config)?;
 
     loop {
         let response = handle_single_request(&mut signer, &persist);
@@ -236,49 +297,6 @@ pub fn handle_single_request<T: SigningBackend, V: ProtocolVersion, C: Read + Wr
     Ok(())
 }
 
-fn create_signer<V: ProtocolVersion>(
-    host: &str,
-    port: u16,
-    identity_key: &ed25519_consensus::SigningKey,
-    config: &Config,
-) -> Result<Signer<Box<dyn SigningBackend>, V, SecretConnection<TcpStream>>, SignerError> {
-    info!("Connecting to CometBFT at {}:{}", host, port);
-
-    let conn = open_secret_connection(
-        host,
-        port,
-        identity_key.clone(),
-        tendermint_p2p::secret_connection::Version::V0_34,
-    )?;
-
-    let backend = create_backend(config)?;
-
-    Ok(Signer::new(backend, conn, config.chain_id.clone()))
-}
-
-fn create_backend(config: &Config) -> Result<Box<dyn SigningBackend>, SignerError> {
-    match config.signing_mode {
-        SigningMode::Native => {
-            let native = config.signing.native.as_ref().unwrap();
-            let path = &native.private_key_path;
-
-            match native.key_type {
-                KeyType::Ed25519 => Ok(Box::new(Ed25519Signer::from_key_file(path)?)),
-                KeyType::Secp256k1 => Ok(Box::new(Secp256k1Signer::from_key_file(path)?)),
-                KeyType::Bls12381 => Ok(Box::new(Bls12381Signer::from_key_file(path)?)),
-            }
-        }
-        SigningMode::VaultTransit => {
-            let vault = config.signing.vault.as_ref().unwrap();
-            Ok(Box::new(TransitVaultSigner::new(vault.clone())?))
-        }
-        SigningMode::VaultSignerPlugin => {
-            let cfg = config.signing.vault.as_ref().unwrap();
-            Ok(Box::new(PluginVaultSigner::new(cfg.clone())?))
-        }
-    }
-}
-
 fn reconnect<V: ProtocolVersion>(
     host: &str,
     port: u16,
@@ -299,7 +317,7 @@ fn reconnect<V: ProtocolVersion>(
         );
         thread::sleep(delay);
 
-        match create_signer::<V>(host, port, identity_key, config) {
+        match crate::signer::create_signer::<V>(host, port, identity_key, config) {
             Ok(signer) => {
                 info!("Successfully reconnected to {}:{}", host, port);
                 *retry_count = 0;

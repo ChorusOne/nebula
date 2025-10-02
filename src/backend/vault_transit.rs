@@ -5,6 +5,7 @@ use log::info;
 use reqwest::blocking::{Client, ClientBuilder};
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde_json::Value;
+use std::fs;
 use std::time::Duration;
 
 use crate::backend::{PublicKey, SigningBackend};
@@ -30,20 +31,17 @@ impl TransitVaultSigner {
             .timeout(Duration::from_secs(10))
             .build()?;
 
-        let pub_key = Self::fetch_public_key(
-            &client,
-            &base_url,
-            &cfg.transit_path,
-            &cfg.key_name,
-            &cfg.token,
-        )?;
+        let token =
+            fs::read_to_string(cfg.token_file_path).expect("Unable to read token from file");
+        let pub_key =
+            Self::fetch_public_key(&client, &base_url, &cfg.transit_path, &cfg.key_name, &token)?;
 
         Ok(TransitVaultSigner {
             client,
             base_url,
             transit_path: cfg.transit_path,
             key_name: cfg.key_name,
-            token: cfg.token,
+            token,
             pub_key,
         })
     }
@@ -71,28 +69,28 @@ impl TransitVaultSigner {
         let data = &resp["data"];
         let key_type = data["type"]
             .as_str()
-            .ok_or_else(|| SignerError::VaultError("invalid key type".to_string()))?;
+            .ok_or_else(|| SignerError::InvalidPublicKey("invalid key type".to_string()))?;
         let latest_version = data["latest_version"].as_i64().ok_or_else(|| {
-            SignerError::VaultError("missing or invalid latest_version".to_string())
+            SignerError::InvalidPublicKey("missing or invalid latest_version".to_string())
         })?;
         let version_str = latest_version.to_string();
 
-        let keys_map = data["keys"]
-            .as_object()
-            .ok_or_else(|| SignerError::VaultError("missing or invalid keys map".to_string()))?;
+        let keys_map = data["keys"].as_object().ok_or_else(|| {
+            SignerError::InvalidPublicKey("missing or invalid keys map".to_string())
+        })?;
         let entry = keys_map.get(&version_str).ok_or_else(|| {
-            SignerError::VaultError(format!(
+            SignerError::InvalidPublicKey(format!(
                 "no key entry for version {} under keys field",
                 version_str
             ))
         })?;
         let public_key_b64 = entry["public_key"].as_str().ok_or_else(|| {
-            SignerError::VaultError("public_key field missing or not a string".to_string())
+            SignerError::InvalidPublicKey("public_key field missing or not a string".to_string())
         })?;
 
         let raw = general_purpose::STANDARD.decode(public_key_b64)?;
         if raw.len() != 32 {
-            return Err(SignerError::VaultError(format!(
+            return Err(SignerError::VaultSigningError(format!(
                 "unexpected ed25519 public key length: {}",
                 raw.len()
             )));
@@ -128,12 +126,12 @@ impl TransitVaultSigner {
             .json::<Value>()?;
 
         let raw_sig_field = resp["data"]["signature"].as_str().ok_or_else(|| {
-            SignerError::VaultError("Vault returned no signature field".to_string())
+            SignerError::VaultSigningError("Vault returned no signature field".to_string())
         })?;
 
         let parts: Vec<&str> = raw_sig_field.split(':').collect();
         if parts.len() != 3 {
-            return Err(SignerError::VaultError(format!(
+            return Err(SignerError::VaultSigningError(format!(
                 "invalid Vault signature format: {}",
                 raw_sig_field
             )));

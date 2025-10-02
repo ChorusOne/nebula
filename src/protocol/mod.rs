@@ -1,8 +1,8 @@
 use crate::types::{ConsensusData, Proposal, SignedMsgType, Vote};
+use core::fmt;
 use log::info;
 use std::cmp::Ordering;
 
-#[derive(Debug)]
 pub enum Request {
     ShowPublicKey,
     Ping,
@@ -22,6 +22,25 @@ pub enum CheckedProposalRequest {
 pub enum ValidRequest {
     Proposal(Proposal),
     Vote(Vote),
+}
+
+impl fmt::Debug for Request {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Request::Proposal(p) => write!(
+                f,
+                "Proposal(h:{}, r:{}, step:{})",
+                p.height, p.round, p.step as u8
+            ),
+            Request::Vote(v) => write!(
+                f,
+                "Vote(h:{}, r:{}, step:{})",
+                v.height, v.round, v.step as u8
+            ),
+            Request::ShowPublicKey => write!(f, "ShowPublicKey"),
+            Request::Ping => write!(f, "Ping"),
+        }
+    }
 }
 
 #[derive(Debug)]

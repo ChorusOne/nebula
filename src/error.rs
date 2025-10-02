@@ -31,9 +31,6 @@ pub enum SignerError {
     #[error("Unsupported message type")]
     UnsupportedMessageType,
 
-    #[error("Not sure what kind of error it should be")]
-    TODO,
-
     #[error("Malformed config: {0}")]
     InvalidConfig(toml::de::Error),
 
@@ -46,14 +43,27 @@ pub enum SignerError {
     #[error("Todo: signing: {0}")]
     Other(String),
 
-    #[error("Todo: signing: {0}")]
-    VaultError(String),
+    #[error("Raft state replication failed: {0}")]
+    StateReplication(String),
+
+    #[error("This node: {0} is not the leader")]
+    NotLeader(String),
+
+    #[error("http error: {0}")]
+    Http(#[from] reqwest::Error),
+
+    #[error("Error producing a Vault signature: {0}")]
+    VaultSigningError(String),
 
     #[error("Todo: signing: {0}")]
     Crypto(String),
 
     #[error("Failed to persist data")]
     PersistError,
+    #[error("Invalid public key: {0}")]
+    InvalidPublicKey(String),
+    #[error("Config validation error: {0}")]
+    ConfigError(String),
 }
 
 impl From<persist::PersistError> for SignerError {
@@ -63,19 +73,19 @@ impl From<persist::PersistError> for SignerError {
 }
 impl From<base64::DecodeError> for SignerError {
     fn from(_b64_error: base64::DecodeError) -> SignerError {
-        SignerError::TODO // possibly invalid data? but i'd like to convey in the error what kind of data did we wanna decode
+        SignerError::InvalidData // possibly invalid data? but i'd like to convey in the error what kind of data did we wanna decode
     }
 }
 
 impl From<std::array::TryFromSliceError> for SignerError {
-    fn from(_slice_error: std::array::TryFromSliceError) -> SignerError {
-        SignerError::TODO // something like invalid key
+    fn from(error: std::array::TryFromSliceError) -> SignerError {
+        SignerError::InvalidPublicKey(error.to_string())
     }
 }
 
 impl From<ed25519_consensus::Error> for SignerError {
-    fn from(_ed25519_error: ed25519_consensus::Error) -> SignerError {
-        SignerError::TODO // something like invalid key... too?
+    fn from(error: ed25519_consensus::Error) -> SignerError {
+        SignerError::InvalidPublicKey(error.to_string())
     }
 }
 
@@ -97,11 +107,11 @@ impl From<serde_json::Error> for SignerError {
     }
 }
 
-impl From<reqwest::Error> for SignerError {
-    fn from(e: reqwest::Error) -> Self {
-        SignerError::Other(e.to_string())
-    }
-}
+// impl From<reqwest::Error> for SignerError {
+//     fn from(e: reqwest::Error) -> Self {
+//         SignerError::HttpError(e.to_string())
+//     }
+// }
 
 impl From<reqwest::header::InvalidHeaderValue> for SignerError {
     fn from(e: reqwest::header::InvalidHeaderValue) -> Self {

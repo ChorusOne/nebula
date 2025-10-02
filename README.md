@@ -1,151 +1,181 @@
 # Nebula - the CometBFT Remote signer, written in Rust
+
 # NOTE: THIS IS AN ALPHA VERSION OF THE SIGNER!
 
-## Supported backends
-- Native signing
-- Vault transit module
+Nebula is a CometBFT remote signer. It uses Raft to create a cluster of signer nodes that collectively maintain the signature high water mark.
+
+## Principles, core assumptions
+
+The core principle of Nebula is that the decision to sign a block is treated as a state transition in a distributed state machine.
+
+A signature is only produced and transmitted *after* the state transition has been successfully committed to a quorum of nodes in the Raft cluster.
+
+There is only ONE signer (Raft leader) at a time that is capable of connecting to CometBFT nodes. (That is also enforced by the privval protocol)
+
+Nebula tries to err on the side of signing less, than actually signing more, so in turbulent leadership changes, uptime is expected to suffer slightly.
+
+Nebula connects to only one blockchain node, with only one consensus key. That means you will need one instance per identity on a network.
+
+### Why it's correct
+
+Nebula prevents double-signing by ensuring these four properties:
+
+In order to not double-sign, privval protocol requires a signer to reliably track last signed state (HRS). Here's how we achieve it.
+
+#### HRS validation logic
+
+[CometBFT documentation](https://docs.cometbft.com/main/spec/consensus/signing) states clearly when a signer should sign an incoming consensus message.
+
+We reject any request that violates CometBFT's consensus rules.
+
+#### Handling only one request at any given time
+
+Nebula uses a mutex which is locked when entering the replication/signing sequence, to make it easier to reason about the signing process.
 
 
-## How to prevent double signing
+#### The cluster always agrees on latest HRS
+
+Raft's leader completeness property ensures all nodes see the same committed HRS sequence.
+When leadership changes occur, the new leader must contain all previously committed entries.
+
+Leaders can crash, restart, or be replaced, but Raft guarantees that the new leader must include all committed entries in its log, so the recorded HRS cannot roll back.
+
+#### HRS state is durably persisted
+
+A log entry containing the HRS is considered committed once the leader that created the entry has replicated it on a majority of servers.
+
+Adding RocksDB's synchronous writes, it means that the "last signed HRS" is only advanced when it's been durably stored in a quorum.
+
+#### Signing only occurs after persisting the state
+
+The signature is sent to the CometBFT node only after it's been replicated, so in a case of a failure during replication, the signer does not advance.
+
+Since we never sign without first recording the new HRS durably across a majority, and Raft + RocksDB guarantee this state cannot be lost or rolled back, double-signing should be impossible.
 
 
-```go
-/*
-A signer should only sign a proposal p if any of the following lines are true:
+### Sequence of a Signing Request
 
-	p.Height > s.Height
-	p.Height == s.Height && p.Round > s.Round
+Consider a "happy" case, where leader of the Nebula cluster connected to a single CometBFT node receives a signing request, e.g a proposal at height 100, at round 1. The flow is as follows:
 
-In other words, a proposal should only be signed if it’s at a higher height, or a higher round for the same height. Once a proposal or vote has been signed for a given height and round, a proposal should never be signed for the same height and round.
-*/
-func shouldSignProposal(cd data.ConsensusData, propHeight int64, propRound int32) bool {
-	return (propHeight > cd.Height) || (propHeight == cd.Height && propRound > int32(cd.Round))
+1. A mutex is acquired to ensure requests from only one node is processed at a time. (`src/handler.rs`)
+2. The node verifies it is still the Raft leader. If not, it bails early.
+3. The request's Height/Round/Step (HRS) is checked against the last known committed state. If signing would violate CometBFT's double-signing rules, the request is rejected. This logic is in `src/safeguards.rs`.
+4. Leader proposes the new HRS state (`{h: 100, r: 1, step: Proposal}`) to the Raft cluster. The handler thread then **blocks** and waits for confirmation that this entry has been committed by a majority of the cluster.
+    -   This is implemented in `SignerRaftNode::replicate_state` (`src/cluster/mod.rs`), which uses an `mpsc::channel` to wait for a callback.
+    -   The callback is only sent by the Raft machinery in `handle_committed_entries` after the entry has been written to the distributed log.
+    -   If a quorum cannot be reached, this step will time out and return an error.
+5.  Leader usees the configured signing backend to produce a signature.
+6.  The signature is sent back to the CometBFT validator.
+7.  Mutex acquired at the beginning is released.
+
+After which, CometBFT node propagates the signature.
+
+Now, consider a very similar case, but the Nebula leader is connected to two CometBFT nodes, say nodes A and B. Nebula received a signing request from node A first.
+For node A, the signing flow looks identical to the one described above. Node B will send the same request, and what happens is as follows:
+
+1. Handler will wait on the mutex until Node A's request is served.
+2. The node verifies it is still the Raft leader. If not, it bails early.
+3. The request's Height/Round/Step (HRS) is checked against the last known committed state. Because this request is the same as one served just before, it will fail here. Nebula will log: `Prevented double signing vote`, and the CometBFT node will report an error:
+```
+failed signing vote err="signerEndpoint returned error #1: Would double-sign vote at same height/round" height=100 module=consensus round=1 vote={"block_id":{"hash":"41648E00251B1F6A94089BF7F4D942B640665325863F0D92E44D36AEBB604904","parts":{"hash":"DDCA7D5234BC6EB67F2E91E68CC22E434C3B2BA5D5D77CFAA44D9FC0D254AC5F","total":1}},"extension":null,"extension_signature":null,"height":"100","round":1,"signature":null,"timestamp":"2025-08-20T15:11:30.581382895Z","type":1,"validator_address":"0F38A435D89DF98B10BE57928BA79111D7440379","validator_index":23}
+```
+
+This concludes the signing request, and only one signature will be transmitted to a CometBFT node.
+
+
+## Testing Strategy and Limitations
+
+Nebula is currently evaluated primarily through integration tests.
+
+-   The test suite in `src/cluster/integration_tests.rs` creates an in-memory cluster of multiple Raft nodes.
+-   The network connection to the CometBFT validator is mocked.
+-   The tests simulate failures by shutting down nodes, transferring leadership, and sending duplicate or out-of-order requests.
+
+### Current Limitations
+
+-   They **do not** test the physical network I/O layers. Bugs in the TCP stream handling or `secret_connection` layer would not be caught.
+-   Fault injection is currently programmatic (shutting down threads) rather than simulating true network partitions.
+-   Probably a lot more which I have not thought about yet
+
+## Supported Backends and Features
+
+-   Signing Backends:
+    -   `native`: Key is stored in a local file.
+    -   `vault_transit`: Uses HashiCorp Vault's Transit engine.
+    -   `vault_signer_plugin`: Uses a custom Vault plugin.
+-   Native key types: Ed25519, Secp256k1, Bls12381.
+
+## Usage
+
+Run `init` with `--help` to check available backends to bootstrap with:
+```
+nebula init --help
+Usage: nebula init --output-path <OUTPUT_PATH> --backend <BACKEND>
+
+Options:
+  -o, --output-path <OUTPUT_PATH>
+  -b, --backend <BACKEND>          [possible values: vault-transit, vault-signer-plugin, native]
+```
+
+
+Generate a default config file at `test.toml`:
+```
+nebula init --output-path test.toml --backend native
+```
+
+Example output:
+
+```
+log_level = "info"
+chain_id = "test-chain-v1"
+version = "v1_0"
+signing_mode = "native"
+
+[[connections]]
+host = "127.0.0.1"
+port = 36558
+
+[[connections]]
+host = "127.0.0.1"
+port = 26558
+
+[raft]
+node_id = 1
+bind_addr = "127.0.0.1:8080"
+data_path = "./raft_data"
+initial_state_path = "./initial_state.json"
+
+[[raft.peers]]
+id = 1
+addr = "127.0.0.1:7001"
+
+
+[signing.native]
+private_key_path = "./privkey"
+key_type = "ed25519"
+```
+
+`connections` array is the list of CometBFT the Nebula leader will connect to.
+`host` and `port` must be set in accordace with `priv_validator_laddr` in CometBFT's config.toml.
+
+`raft` section defines settings for the Raft signer cluster.
+Peer list must include EVERY member of the cluster, including the very node you're setting up.
+
+For native signing, you can generate keys with `./target/release/nebula keys generate --key-type ed25519`.
+Example output:
+```
+private key: UINHR9vYjWllyqYo+Jxc5fjYUBox3eRygj6dbUughIE=
+{
+  "address": "D79D2CD52901D6D42D7617B977447EEC1CA00887",
+  "priv_key": {
+    "type": "tendermint/PrivKeyEd25519",
+    "value": "UINHR9vYjWllyqYo+Jxc5fjYUBox3eRygj6dbUughIEVDPizljxIzHVAz2b6YuTdmuLUTgn12On0wXXxyEkhHw=="
+  },
+  "pub_key": {
+    "type": "tendermint/PubKeyEd25519",
+    "value": "FQz4s5Y8SMx1QM9m+mLk3Zri1E4J9djp9MF18chJIR8="
+  }
 }
-
-/*
-A signer should only sign a vote v if any of the following lines are true:
-
-	v.Height > s.Height
-	v.Height == s.Height && v.Round > s.Round
-	v.Height == s.Height && v.Round == s.Round && v.Step == 0x1 && s.Step == 0x20
-	v.Height == s.Height && v.Round == s.Round && v.Step == 0x2 && s.Step != 0x2
-
-In other words, a vote should only be signed if it’s:
-  - at a higher height
-  - at a higher round for the same height
-  - a prevote for the same height and round where we haven’t signed a prevote or precommit (but have signed a proposal)
-  - a precommit for the same height and round where we haven’t signed a precommit (but have signed a proposal and/or a prevote)
-*/
-func shouldSignVote(cd data.ConsensusData, voteHeight int64, voteRound int32, voteStep int8) bool {
-	if voteHeight > cd.Height {
-		return true
-	}
-
-	if voteHeight == cd.Height && voteRound > int32(cd.Round) {
-		return true
-	}
-
-	if voteHeight == cd.Height &&
-		voteRound == int32(cd.Round) &&
-		voteStep == data.StepPrevote &&
-		cd.Step == data.StepPropose {
-		return true
-	}
-
-	if voteHeight == cd.Height &&
-		voteRound == int32(cd.Round) &&
-		voteStep == data.StepPrecommit &&
-		cd.Step != data.StepPrecommit {
-		return true
-	}
-	return false
-}
-
-func shouldSignVoteExtension(chainID string, signBz, extSignBz []byte) (bool, error) {
-	var vote cmtypes.CanonicalVote
-	if err := protoio.UnmarshalDelimited(signBz, &vote); err != nil {
-		return false, nil
-	}
-
-	if vote.Type == cmtypes.PrecommitType && vote.BlockID != nil && len(extSignBz) > 0 {
-		var ext cmtypes.CanonicalVoteExtension
-		if err := protoio.UnmarshalDelimited(extSignBz, &ext); err != nil {
-			return false, fmt.Errorf("failed to unmarshal vote extension: %w", err)
-		}
-
-		switch {
-		case ext.ChainId != chainID:
-			return false, fmt.Errorf("extension chain ID %s does not match expected %s", ext.ChainId, chainID)
-		case ext.Height != vote.Height:
-			return false, fmt.Errorf("extension height %d does not match vote height %d", ext.Height, vote.Height)
-		case ext.Round != vote.Round:
-			return false, fmt.Errorf("extension round %d does not match vote round %d", ext.Round, vote.Round)
-		}
-
-		return true, nil
-	}
-
-	return false, nil
-}
-
 ```
 
-if you are a signer:
-1. load the config
-2. validate everything, prepare to start
-3. wait until you are the leader
-4. once leader, start the polling loop
-5. serve requests in loop, do not double sign as per rules above
-6. if you lose leadership, go back to 3
-
-Source for above: https://docs.cometbft.com/v1.0/spec/consensus/signing
-
-https://arxiv.org/pdf/1807.04938
-
-### Code generation from proto files
-
-Install buf:
-```
-GOBIN=/usr/local/bin go install github.com/bufbuild/buf/cmd/buf@v1.54.0
-```
-
-
-Create an account at https://buf.build
-
-Get a token, for example here: https://buf.build/cometbft/cometbft/sdks/main:community/neoeinstein-prost
-
-Login so you won't get rate-limited:
-```
-cargo login --registry buf "Bearer {token}"
-```
-
-Generate files (you shouldn't need to do that):
-```
-buf generate --template buf.gen.yaml
-```
-
-
-```
-
-   89  sudo apt update && sudo apt install vault
-   94  vault secrets enable transit
-   98  vault transit import transit/keys/validator-key @privkey.pk8.b64 type=ed25519 exportable=true
-   99  vault transit import transit/keys/validator-key @b64_privkey type=ed25519 exportable=true
-  100  vault read -format=json transit/keys/validator-key   | jq -r '.data.keys["1"].public_key
-  103  vault read -format=json transit/keys/validator-key   | jq -r '.data.keys["1"].public_key
-  115  vault server -dev -dev-root-token-id="root" -dev-listen-address="127.0.0.1:8200"
-  125  vault read -format=json transit/keys/validator-key   | jq -r '.data.keys["1"].public_key
-  129  vault read -format=json transit/keys/validator-key   | jq -r '.data.keys["1"].public_key
-  131  vault secrets enable transit
-  132  vault transit import transit/keys/validator-key @b64_privkey type=ed25519 exportable=true
-  165  vault transit import transit/keys/validator-key-injective @b64_injective_privkey type=ed25519 exportable=true
-  168  vault transit import transit/keys/validator-key-injective @b64_injective_privkey type=ed25519 exportable=true
-  173  vault read -format=json transit/keys/validator-key-injective   | jq -r '.data.keys["1"].public_key
-  183  vault read -format=json transit/keys/validator-key   | jq -r '.data.keys["1"].public_key
-  189  vault read -format=json transit/keys/validator-key   | jq -r '.data.keys["1"].public_key
-  191  vault read -format=json transit/keys/validator-key   | jq -r '.data.keys["1"]
-  193  vault read -format=json transit/keys/validator-key   | jq -r '.data.keys["1"]'
-  194  vault read -format=json transit/keys/validator-key   | jq -r '.data'
-  207  history | grep vault
-root@ha-signer03:~#
-```
+In this case, `UINHR9vYjWllyqYo+Jxc5fjYUBox3eRygj6dbUughIE=` must be put under ./privkey.

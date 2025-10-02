@@ -4,7 +4,7 @@ use crate::error::SignerError;
 use crate::proto::v0_38;
 use crate::protocol::{Request, Response};
 use crate::types::{BlockId, ConsensusData, PartSetHeader, Proposal, SignedMsgType, Vote};
-use log::{info, trace};
+use log::trace;
 use prost::Message;
 
 // TODO: either keep chain_id here or add it to the domain Vote/Proposal
@@ -23,7 +23,7 @@ impl ProtocolVersion for VersionV0_38 {
         match msg.sum {
             Some(v0_38::privval::message::Sum::SignVoteRequest(req)) => {
                 let vote = req.vote.ok_or(SignerError::InvalidData)?;
-                info!("parsed vote extension: {:?}", vote.extension);
+                trace!("parsed vote extension: {:?}", vote.extension);
                 Ok((Request::Vote(vote.try_into()?), req.chain_id))
             }
             Some(v0_38::privval::message::Sum::SignProposalRequest(req)) => {

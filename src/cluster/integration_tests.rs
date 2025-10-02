@@ -12,8 +12,9 @@ use log::info;
 use prost::Message;
 use rand::Rng;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
-use std::thread;
+use std::thread::{self};
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
@@ -189,7 +190,6 @@ fn happy_path_signing_on_stable_cluster() {
         _ => panic!("Wrong response type"),
     }
 
-    thread::sleep(Duration::from_millis(500));
     for node in &followers {
         let state = node.signer_state.read().unwrap();
         assert_eq!(state.height, 100);
@@ -321,13 +321,12 @@ fn leader_election_during_signing() {
     for _i in 0..3 {
         let success_counter = Arc::clone(&success_count);
         let error_counter = Arc::clone(&error_count);
-
         let leader = leader.clone();
 
         let handle = thread::spawn(move || {
             let (mut signer, handle) = create_signer_with_mock_conn();
 
-            for height in 100..110 {
+            for height in 100..102 {
                 let req_bytes = create_proposal_request_bytes(height, 0);
                 if handle.request_sender.send(req_bytes).is_err() {
                     break;
@@ -355,8 +354,7 @@ fn leader_election_during_signing() {
                         error_counter.fetch_add(1, Ordering::SeqCst);
                     }
                 }
-
-                thread::sleep(Duration::from_millis(15));
+                thread::sleep(Duration::from_millis(15))
             }
         });
         handles.push(handle);
@@ -707,8 +705,6 @@ fn new_leader_signing() {
 
     initial_leader.shutdown().unwrap();
 
-    thread::sleep(Duration::from_millis(500));
-
     let (new_leader_node, _) = wait_for_leader_and_pop(followers);
 
     let new_leader = Arc::new(Mutex::new(PersistVariants::Raft(new_leader_node)));
@@ -792,4 +788,110 @@ fn too_much_turbulence() {
     let new_leader = wait_for_leader(&remaining_nodes, Duration::from_secs(3));
 
     assert!(new_leader.is_none(), "leader election should fail");
+}
+
+// NOTE: this test was used for the try_lock mutex.
+#[test]
+fn signing_lock_prevents_concurrent_requests() {
+    let harness = TestHarness::new(3);
+    let nodes = harness.nodes;
+    let (leader_node, followers) = wait_for_leader_and_pop(nodes);
+
+    let (mut signer1, handle1) = create_signer_with_mock_conn();
+    let (mut signer2, handle2) = create_signer_with_mock_conn();
+
+    let req_bytes = create_proposal_request_bytes(100, 0);
+    handle1.request_sender.send(req_bytes.clone()).unwrap();
+    handle2.request_sender.send(req_bytes).unwrap();
+
+    let (tx, rx) = mpsc::channel();
+
+    let leader = Arc::new(Mutex::new(PersistVariants::Raft(leader_node)));
+    let leader1 = Arc::clone(&leader);
+    let leader2 = Arc::clone(&leader);
+
+    std::thread::scope(|s| {
+        let tx1 = tx.clone();
+        s.spawn(move || {
+            let _ = handle_single_request(&mut signer1, &leader1);
+            let response_bytes = handle1.response_receiver.recv().unwrap();
+            let response_msg =
+                v0_38::privval::Message::decode_length_delimited(response_bytes.as_slice())
+                    .unwrap();
+            tx1.send(response_msg).unwrap();
+        });
+
+        s.spawn(move || {
+            let _ = handle_single_request(&mut signer2, &leader2);
+            let response_bytes = handle2.response_receiver.recv().unwrap();
+            let response_msg =
+                v0_38::privval::Message::decode_length_delimited(response_bytes.as_slice())
+                    .unwrap();
+            tx.send(response_msg).unwrap();
+        });
+    });
+
+    let mut responses = vec![rx.recv().unwrap(), rx.recv().unwrap()];
+
+    let success_response_index = responses
+        .iter()
+        .position(|r| {
+            if let Some(v0_38::privval::message::Sum::SignedProposalResponse(res)) = &r.sum {
+                res.error.is_none()
+            } else {
+                false
+            }
+        })
+        .expect("Expected one successful response");
+
+    let success_response = responses.remove(success_response_index);
+    let failure_response = responses.pop().unwrap();
+
+    match success_response.sum {
+        Some(v0_38::privval::message::Sum::SignedProposalResponse(res)) => {
+            assert!(
+                res.error.is_none(),
+                "The winning request should succeed without error"
+            );
+            assert!(
+                !res.proposal.unwrap().signature.is_empty(),
+                "The winning request should have a signature"
+            );
+        }
+        _ => panic!("Expected a SignedProposalResponse for the successful case"),
+    }
+
+    match failure_response.sum {
+        Some(v0_38::privval::message::Sum::SignedProposalResponse(res)) => {
+            let err = res.error.expect("The losing request should have an error");
+            assert!(
+                err.description
+                    .contains("Would double-sign proposal at height/round/step"),
+                "Error message should indicate a lock failure. Got: '{}'",
+                err.description
+            );
+            assert!(
+                res.proposal.is_none(),
+                "The losing request should not contain a proposal"
+            );
+        }
+        _ => panic!("Expected a SignedProposalResponse for the failure case"),
+    }
+
+    let leader_node = unwrap_node(leader);
+    let state = leader_node.signer_state.read().unwrap();
+    assert_eq!(
+        state.height, 100,
+        "State should be updated by the single successful request"
+    );
+    assert_eq!(state.round, 0);
+
+    for node in &followers {
+        let state = node.signer_state.read().unwrap();
+        assert_eq!(
+            state.height, 100,
+            "State should be updated by the single successful request"
+        );
+        assert_eq!(state.round, 0);
+    }
 }

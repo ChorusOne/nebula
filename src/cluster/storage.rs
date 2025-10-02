@@ -15,16 +15,16 @@ fn entry_key(index: u64) -> Vec<u8> {
     format!("entry:{}", index).into_bytes()
 }
 
-pub struct RaftStorage {
+pub struct RocksDBStorage {
     db: DB,
 }
 
-impl RaftStorage {
+impl RocksDBStorage {
     pub fn new<P: AsRef<Path>>(path: P) -> Self {
         let mut opts = Options::default();
         opts.create_if_missing(true);
         let db = DB::open(&opts, path).expect("Failed to open RocksDB");
-        RaftStorage { db }
+        RocksDBStorage { db }
     }
 
     pub fn read_signer_state(&self) -> raft::Result<ConsensusData> {
@@ -40,48 +40,58 @@ impl RaftStorage {
 
     pub fn write_signer_state(&self, sm: &ConsensusData) -> raft::Result<()> {
         let value = sm.to_bytes();
+        let mut opts = rocksdb::WriteOptions::default();
+        opts.set_sync(true);
         self.db
-            .put(KEY_SIGNER_STATE, &value)
+            .put_opt(KEY_SIGNER_STATE, &value, &opts)
             .map_err(|e| RaftError::Store(StorageError::Other(Box::new(e))))
     }
 
     pub fn append_entries(&mut self, entries: &[Entry]) -> raft::Result<()> {
+        let mut opts = rocksdb::WriteOptions::default();
+        opts.set_sync(true);
         for entry in entries {
             let key = entry_key(entry.get_index());
             let value = entry
                 .write_to_bytes()
                 .map_err(|e| RaftError::Store(StorageError::Other(Box::new(e))))?;
             self.db
-                .put(key, &value)
+                .put_opt(key, &value, &opts)
                 .map_err(|e| RaftError::Store(StorageError::Other(Box::new(e))))?;
         }
         if let Some(last_entry) = entries.last() {
             self.db
-                .put(KEY_LAST_INDEX, last_entry.get_index().to_be_bytes())
+                .put_opt(KEY_LAST_INDEX, last_entry.get_index().to_be_bytes(), &opts)
                 .map_err(|e| RaftError::Store(StorageError::Other(Box::new(e))))?;
         }
         Ok(())
     }
 
     pub fn set_hard_state(&mut self, hs: HardState) -> raft::Result<()> {
+        let mut opts = rocksdb::WriteOptions::default();
+        opts.set_sync(true);
         let value = hs
             .write_to_bytes()
             .map_err(|e| RaftError::Store(StorageError::Other(Box::new(e))))?;
         self.db
-            .put(KEY_HARD_STATE, &value)
+            .put_opt(KEY_HARD_STATE, &value, &opts)
             .map_err(|e| RaftError::Store(StorageError::Other(Box::new(e))))
     }
 
     pub fn set_conf_state(&mut self, cs: ConfState) -> raft::Result<()> {
+        let mut opts = rocksdb::WriteOptions::default();
+        opts.set_sync(true);
         let value = cs
             .write_to_bytes()
             .map_err(|e| RaftError::Store(StorageError::Other(Box::new(e))))?;
         self.db
-            .put(KEY_CONF_STATE, &value)
+            .put_opt(KEY_CONF_STATE, &value, &opts)
             .map_err(|e| RaftError::Store(StorageError::Other(Box::new(e))))
     }
 
     pub fn apply_snapshot(&mut self, snapshot: Snapshot) -> raft::Result<()> {
+        let mut opts = rocksdb::WriteOptions::default();
+        opts.set_sync(true);
         info!(
             "[storage] Applying snapshot at index {}",
             snapshot.get_metadata().get_index()
@@ -102,13 +112,13 @@ impl RaftStorage {
         self.set_hard_state(hs)?;
 
         self.db
-            .put(KEY_LAST_INDEX, index.to_be_bytes())
+            .put_opt(KEY_LAST_INDEX, index.to_be_bytes(), &opts)
             .map_err(|e| RaftError::Store(StorageError::Other(Box::new(e))))?;
         Ok(())
     }
 }
 
-impl Storage for RaftStorage {
+impl Storage for RocksDBStorage {
     fn initial_state(&self) -> raft::Result<RaftState> {
         let hard_state = match self
             .db

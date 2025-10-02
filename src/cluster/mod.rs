@@ -1,6 +1,6 @@
 mod storage;
 
-use crate::cluster::storage::RaftStorage;
+use crate::cluster::storage::RocksDBStorage;
 use crate::config::RaftConfig;
 use crate::error::SignerError;
 use crate::types::ConsensusData;
@@ -23,6 +23,7 @@ enum RaftMessage {
     Propose(ConsensusData, Sender<Result<(), SignerError>>),
     Msg(RaftProtoMessage),
     TransferLeadership(u64),
+    #[allow(dead_code)]
     Shutdown,
 }
 
@@ -31,10 +32,12 @@ pub struct SignerRaftNode {
     pub signer_state: Arc<RwLock<ConsensusData>>,
     proposal_sender: Sender<RaftMessage>,
     raft_state: Arc<RwLock<(StateRole, u64)>>,
+    #[allow(dead_code)]
     shutdown_handle: Arc<RwLock<Option<thread::JoinHandle<()>>>>,
 }
 
 impl SignerRaftNode {
+    #[allow(dead_code)]
     pub fn shutdown(&self) -> Result<(), SignerError> {
         info!("Shutting down node {}", self.node_id);
 
@@ -89,9 +92,7 @@ impl SignerRaftNode {
             self.leader_id().unwrap(),
         );
         if !self.is_leader() {
-            return Err(SignerError::Other(
-                "This node is not the leader".to_string(),
-            ));
+            return Err(SignerError::NotLeader(self.node_id.to_string()));
         }
 
         let (tx, rx) = mpsc::channel();
@@ -112,7 +113,7 @@ impl SignerRaftNode {
             }
             Err(_) => {
                 warn!("replication timed out");
-                Err(SignerError::Other(
+                Err(SignerError::StateReplication(
                     "State replication timed out".to_string(),
                 ))
             }
@@ -137,7 +138,7 @@ impl SignerRaftNode {
     pub fn transfer_leadership(&self, transferee_id: u64) -> Result<(), SignerError> {
         info!("transferring leadership to node {}", transferee_id);
         if !self.is_leader() {
-            return Err(SignerError::Other(
+            return Err(SignerError::NotLeader(
                 "This node is not the leader, cannot transfer leadership".to_string(),
             ));
         }
@@ -163,10 +164,9 @@ fn stdlog_to_slog() -> slog::Logger {
     slog::Logger::root(drain, o!())
 }
 
-fn create_storage(config: &RaftConfig) -> RaftStorage {
-    let path = format!("{}_{}", config.data_path, config.node_id);
-    info!("storage path: {}", path);
-    let mut storage = RaftStorage::new(&path);
+fn create_storage(config: &RaftConfig) -> RocksDBStorage {
+    info!("storage path: {}", config.data_path);
+    let mut storage = RocksDBStorage::new(&config.data_path);
 
     let peer_ids: Vec<u64> = config.peers.iter().map(|p| p.id).collect();
     let init_state = storage.initial_state().unwrap();
@@ -181,7 +181,7 @@ fn create_storage(config: &RaftConfig) -> RaftStorage {
     storage
 }
 
-fn bootstrap_storage(storage: &mut RaftStorage, peer_ids: Vec<u64>, initial_state_path: &str) {
+fn bootstrap_storage(storage: &mut RocksDBStorage, peer_ids: Vec<u64>, initial_state_path: &str) {
     let mut snap = Snapshot::default();
     snap.mut_metadata().set_index(1);
     snap.mut_metadata().set_term(1);
@@ -307,7 +307,7 @@ fn start_outbound_handler(
 
 fn start_raft_thread(
     node_id: u64,
-    storage: RaftStorage,
+    storage: RocksDBStorage,
     logger: slog::Logger,
     in_rx: mpsc::Receiver<RaftMessage>,
     out_tx: Sender<RaftProtoMessage>,
@@ -374,7 +374,7 @@ fn start_raft_thread(
 }
 
 fn on_ready(
-    raft_group: &mut RawNode<RaftStorage>,
+    raft_group: &mut RawNode<RocksDBStorage>,
     signer_state: &Arc<RwLock<ConsensusData>>,
     net_tx: &Sender<RaftProtoMessage>,
     raft_state: &Arc<RwLock<(StateRole, u64)>>,
@@ -396,7 +396,7 @@ fn on_ready(
                 proposal_callbacks.len()
             );
             for callback in proposal_callbacks.drain(..) {
-                let _ = callback.send(Err(SignerError::Other(
+                let _ = callback.send(Err(SignerError::NotLeader(
                     "Lost leadership during replication".into(),
                 )));
             }
@@ -464,7 +464,7 @@ fn on_ready(
 }
 
 fn handle_committed_entries(
-    raft_group: &mut RawNode<RaftStorage>,
+    raft_group: &mut RawNode<RocksDBStorage>,
     committed_entries: Vec<raft_proto::eraftpb::Entry>,
     signer_state: &Arc<RwLock<ConsensusData>>,
     proposal_callbacks: &mut VecDeque<Sender<Result<(), SignerError>>>,
