@@ -15,6 +15,7 @@ impl ProtocolVersion for VersionV1_0 {
     type VoteResponse = v1::privval::SignedVoteResponse;
     type PubKeyResponse = v1::privval::PubKeyResponse;
     type PingResponse = v1::privval::PingResponse;
+    type BytesResponse = v1::privval::SignBytesResponse;
 
     fn parse_request(msg_bytes: Vec<u8>) -> Result<(Request, String), SignerError> {
         let msg = v1::privval::Message::decode_length_delimited(msg_bytes.as_ref())?;
@@ -32,9 +33,7 @@ impl ProtocolVersion for VersionV1_0 {
             Some(v1::privval::message::Sum::SignProposalRequest(req)) => {
                 let proposal = req.proposal.ok_or(SignerError::InvalidData)?;
                 Ok((
-                    Request::Proposal(tendermint_proposal_to_domain(
-                        proposal,
-                    )?),
+                    Request::Proposal(tendermint_proposal_to_domain(proposal)?),
                     req.chain_id,
                 ))
             }
@@ -50,6 +49,7 @@ impl ProtocolVersion for VersionV1_0 {
         response: Response<
             Self::ProposalResponse,
             Self::VoteResponse,
+            Self::BytesResponse,
             Self::PubKeyResponse,
             Self::PingResponse,
         >,
@@ -62,6 +62,9 @@ impl ProtocolVersion for VersionV1_0 {
             }
             Response::Ping(resp) => v1::privval::message::Sum::PingResponse(resp),
             Response::PublicKey(resp) => v1::privval::message::Sum::PubKeyResponse(resp),
+            Response::BytesSignature(signature) => {
+                v1::privval::message::Sum::SignBytesResponse(signature)
+            }
         };
         v1::privval::Message { sum: Some(msg) }.encode_length_delimited(&mut buf)?;
         Ok(buf)
@@ -158,7 +161,10 @@ impl ProtocolVersion for VersionV1_0 {
             vote: None,
             error: Some(v1::privval::RemoteSignerError {
                 code: 1,
-                description: format!("Would double-sign vote at height/round/step {}/{}/{:?}", cd.height, cd.round, cd.step),
+                description: format!(
+                    "Would double-sign vote at height/round/step {}/{}/{:?}",
+                    cd.height, cd.round, cd.step
+                ),
             }),
         }
     }
@@ -168,7 +174,10 @@ impl ProtocolVersion for VersionV1_0 {
             proposal: None,
             error: Some(v1::privval::RemoteSignerError {
                 code: 1,
-                description: format!("Would double-sign proposal at height/round/step {}/{}/{:?}", cd.height, cd.round, cd.step),
+                description: format!(
+                    "Would double-sign proposal at height/round/step {}/{}/{:?}",
+                    cd.height, cd.round, cd.step
+                ),
             }),
         }
     }
@@ -234,7 +243,15 @@ impl ProtocolVersion for VersionV1_0 {
         v1::privval::PingResponse {}
     }
 
-    fn create_error_response(message: &str) -> Response<Self::ProposalResponse, Self::VoteResponse, Self::PubKeyResponse, Self::PingResponse> {
+    fn create_error_response(
+        message: &str,
+    ) -> Response<
+        Self::ProposalResponse,
+        Self::VoteResponse,
+        Self::BytesResponse,
+        Self::PubKeyResponse,
+        Self::PingResponse,
+    > {
         Response::SignedProposal(v1::privval::SignedProposalResponse {
             proposal: None,
             error: Some(v1::privval::RemoteSignerError {
@@ -242,6 +259,13 @@ impl ProtocolVersion for VersionV1_0 {
                 description: message.to_string(),
             }),
         })
+    }
+
+    fn create_bytes_response(signed_bytes: Vec<u8>) -> Self::BytesResponse {
+        v1::privval::SignBytesResponse {
+            error: None,
+            signature: signed_bytes.into(),
+        }
     }
 }
 fn tendermint_vote_to_domain(vote: v1::types::Vote) -> Result<Vote, SignerError> {

@@ -8,6 +8,7 @@ pub enum Request {
     Ping,
     Proposal(Proposal),
     Vote(Vote),
+    Bytes(Vec<u8>),
 }
 
 pub enum CheckedVoteRequest {
@@ -22,6 +23,7 @@ pub enum CheckedProposalRequest {
 pub enum ValidRequest {
     Proposal(Proposal),
     Vote(Vote),
+    Bytes(Vec<u8>),
 }
 
 impl fmt::Debug for Request {
@@ -39,15 +41,17 @@ impl fmt::Debug for Request {
             ),
             Request::ShowPublicKey => write!(f, "ShowPublicKey"),
             Request::Ping => write!(f, "Ping"),
+            Request::Bytes(bytes) => write!(f, "SignBytes({:?})", bytes),
         }
     }
 }
 
 #[derive(Debug)]
 #[non_exhaustive]
-pub enum Response<P, V, K, G> {
+pub enum Response<P, V, B, K, G> {
     SignedProposal(P),
     SignedVote(V),
+    BytesSignature(B),
     PublicKey(K),
     Ping(G),
 }

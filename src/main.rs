@@ -13,6 +13,7 @@ mod versions;
 
 use crate::backend::SigningBackend;
 use crate::error::SignerError;
+use crate::persist::PersistedRequest;
 use crate::protocol::Response;
 use clap::{Parser as _, Subcommand};
 use cluster::SignerRaftNode;
@@ -201,9 +202,20 @@ fn handle_connection<V: ProtocolVersion + Send + 'static>(
 }
 
 enum RequestProcessingAction<V: ProtocolVersion> {
-    PersistAndSign { request: ValidRequest },
-    ReplyWith(Response<V::ProposalResponse, V::VoteResponse, V::PubKeyResponse, V::PingResponse>),
+    PersistAndSign {
+        request: ValidRequest,
+    },
+    ReplyWith(
+        Response<
+            V::ProposalResponse,
+            V::VoteResponse,
+            V::BytesResponse,
+            V::PubKeyResponse,
+            V::PingResponse,
+        >,
+    ),
     ShowPublicKey,
+    Bytes(Vec<u8>),
 }
 
 fn process_request<T: SigningBackend, V: ProtocolVersion>(
@@ -231,6 +243,7 @@ fn process_request<T: SigningBackend, V: ProtocolVersion>(
         Request::Ping => {
             RequestProcessingAction::ReplyWith(Response::Ping(V::create_ping_response()))
         }
+        Request::Bytes(bytes_to_sign) => RequestProcessingAction::Bytes(bytes_to_sign),
     }
 }
 
@@ -260,6 +273,9 @@ pub fn handle_single_request<T: SigningBackend, V: ProtocolVersion, C: Read + Wr
         RequestProcessingAction::ShowPublicKey => {
             let public_key = signer.public_key()?;
             Response::PublicKey(V::create_pub_key_response(&public_key))
+        }
+        RequestProcessingAction::Bytes(bytes_to_sign) => {
+            signer.sign(PersistedRequest(ValidRequest::Bytes(bytes_to_sign)))?
         }
     };
 

@@ -16,6 +16,7 @@ impl ProtocolVersion for VersionV0_38 {
     type VoteResponse = v0_38::privval::SignedVoteResponse;
     type PubKeyResponse = v0_38::privval::PubKeyResponse;
     type PingResponse = v0_38::privval::PingResponse;
+    type BytesResponse = ();
 
     fn parse_request(msg_bytes: Vec<u8>) -> Result<(Request, String), SignerError> {
         let msg = v0_38::privval::Message::decode_length_delimited(msg_bytes.as_ref())?;
@@ -44,6 +45,7 @@ impl ProtocolVersion for VersionV0_38 {
         response: Response<
             Self::ProposalResponse,
             Self::VoteResponse,
+            Self::BytesResponse,
             Self::PubKeyResponse,
             Self::PingResponse,
         >,
@@ -56,6 +58,7 @@ impl ProtocolVersion for VersionV0_38 {
             }
             Response::Ping(resp) => v0_38::privval::message::Sum::PingResponse(resp),
             Response::PublicKey(resp) => v0_38::privval::message::Sum::PubKeyResponse(resp),
+            Response::BytesSignature(_bytes) => return Err(SignerError::UnsupportedMessageType),
         };
         v0_38::privval::Message { sum: Some(msg) }.encode_length_delimited(&mut buf)?;
         Ok(buf)
@@ -248,6 +251,7 @@ impl ProtocolVersion for VersionV0_38 {
     ) -> Response<
         Self::ProposalResponse,
         Self::VoteResponse,
+        Self::BytesResponse,
         Self::PubKeyResponse,
         Self::PingResponse,
     > {
@@ -258,6 +262,10 @@ impl ProtocolVersion for VersionV0_38 {
                 description: message.to_string(),
             }),
         })
+    }
+
+    fn create_bytes_response(_bytes_to_sign: Vec<u8>) -> Self::BytesResponse {
+        todo!()
     }
 }
 

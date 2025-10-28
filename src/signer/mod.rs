@@ -41,7 +41,13 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
         &mut self,
         request: PersistedRequest,
     ) -> Result<
-        Response<V::ProposalResponse, V::VoteResponse, V::PubKeyResponse, V::PingResponse>,
+        Response<
+            V::ProposalResponse,
+            V::VoteResponse,
+            V::BytesResponse,
+            V::PubKeyResponse,
+            V::PingResponse,
+        >,
         SignerError,
     > {
         match request.0 {
@@ -81,6 +87,11 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
                 debug!("Signable data: {}", hex::encode(&signable_data));
                 let response = V::create_vote_response(&vote, signature, None);
                 Ok(Response::SignedVote(response))
+            }
+            ValidRequest::Bytes(bytes_to_sign) => {
+                let signature = self.signer.sign(&bytes_to_sign)?;
+                let response = V::create_bytes_response(signature);
+                Ok(Response::BytesSignature(response))
             }
         }
     }
@@ -133,6 +144,7 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
         response: Response<
             V::ProposalResponse,
             V::VoteResponse,
+            V::BytesResponse,
             V::PubKeyResponse,
             V::PingResponse,
         >,

@@ -17,6 +17,7 @@ pub trait ProtocolVersion {
     type Message: prost::Message + Default;
     type ProposalResponse;
     type VoteResponse;
+    type BytesResponse;
     type PubKeyResponse;
     type PingResponse;
 
@@ -25,6 +26,7 @@ pub trait ProtocolVersion {
         response: Response<
             Self::ProposalResponse,
             Self::VoteResponse,
+            Self::BytesResponse,
             Self::PubKeyResponse,
             Self::PingResponse,
         >,
@@ -40,6 +42,7 @@ pub trait ProtocolVersion {
         signature: Vec<u8>,
         extension_signature: Option<Vec<u8>>,
     ) -> Self::VoteResponse;
+    fn create_bytes_response(signed_bytes: Vec<u8>) -> Self::BytesResponse;
     fn create_pub_key_response(pub_key: &PublicKey) -> Self::PubKeyResponse;
     fn create_ping_response() -> Self::PingResponse;
     fn create_error_response(
@@ -47,6 +50,7 @@ pub trait ProtocolVersion {
     ) -> Response<
         Self::ProposalResponse,
         Self::VoteResponse,
+        Self::BytesResponse,
         Self::PubKeyResponse,
         Self::PingResponse,
     >;

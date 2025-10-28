@@ -189,6 +189,7 @@ impl From<&ValidRequest> for ConsensusData {
                 round: p.round,
                 step: p.step,
             },
+            ValidRequest::Bytes(_) => todo!(),
         }
     }
 }
