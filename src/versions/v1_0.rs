@@ -15,6 +15,7 @@ impl ProtocolVersion for VersionV1_0 {
     type VoteResponse = v1::privval::SignedVoteResponse;
     type PubKeyResponse = v1::privval::PubKeyResponse;
     type PingResponse = v1::privval::PingResponse;
+    type BytesResponse = v1::privval::SignBytesResponse;
 
     fn parse_request(msg_bytes: Vec<u8>) -> Result<(Request, String), SignerError> {
         let msg = v1::privval::Message::decode_length_delimited(msg_bytes.as_ref())?;
@@ -40,6 +41,9 @@ impl ProtocolVersion for VersionV1_0 {
                 Ok((Request::ShowPublicKey, req.chain_id))
             }
             Some(v1::privval::message::Sum::PingRequest(_)) => Ok((Request::Ping, String::new())),
+            Some(v1::privval::message::Sum::SignBytesRequest(req)) => {
+                Ok((Request::SignBytes(req.value.to_vec()), String::new()))
+            }
             _ => Err(SignerError::UnsupportedMessageType),
         }
     }
@@ -50,6 +54,7 @@ impl ProtocolVersion for VersionV1_0 {
             Self::VoteResponse,
             Self::PubKeyResponse,
             Self::PingResponse,
+            Self::BytesResponse,
         >,
     ) -> Result<Vec<u8>, SignerError> {
         let mut buf = Vec::new();
@@ -60,6 +65,7 @@ impl ProtocolVersion for VersionV1_0 {
             }
             Response::Ping(resp) => v1::privval::message::Sum::PingResponse(resp),
             Response::PublicKey(resp) => v1::privval::message::Sum::PubKeyResponse(resp),
+            Response::SignBytes(resp) => v1::privval::message::Sum::SignBytesResponse(resp),
         };
         v1::privval::Message { sum: Some(msg) }.encode_length_delimited(&mut buf)?;
         Ok(buf)
@@ -221,6 +227,13 @@ impl ProtocolVersion for VersionV1_0 {
 
     fn create_ping_response() -> Self::PingResponse {
         v1::privval::PingResponse {}
+    }
+
+    fn create_signed_bytes_response(signature: Vec<u8>) -> Self::BytesResponse {
+        v1::privval::SignBytesResponse {
+            error: None,
+            signature: signature.into(),
+        }
     }
 }
 fn tendermint_vote_to_domain(vote: v1::types::Vote) -> Result<Vote, SignerError> {

@@ -13,6 +13,7 @@ impl ProtocolVersion for VersionV0_34 {
     type VoteResponse = ();
     type PubKeyResponse = ();
     type PingResponse = ();
+    type BytesResponse = ();
 
     fn parse_request(_msg_bytes: Vec<u8>) -> Result<(Request, String), SignerError> {
         todo!("v0.34")
@@ -24,6 +25,7 @@ impl ProtocolVersion for VersionV0_34 {
             Self::VoteResponse,
             Self::PubKeyResponse,
             Self::PingResponse,
+            Self::BytesResponse,
         >,
     ) -> Result<Vec<u8>, SignerError> {
         todo!("v0.34")
@@ -63,6 +65,10 @@ impl ProtocolVersion for VersionV0_34 {
     }
 
     fn vote_extension_to_bytes(_vote: &Vote, _chain_id: &str) -> Result<Vec<u8>, SignerError> {
+        todo!()
+    }
+
+    fn create_signed_bytes_response(_signature: Vec<u8>) -> Self::BytesResponse {
         todo!()
     }
 }

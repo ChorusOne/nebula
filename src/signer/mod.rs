@@ -39,7 +39,13 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
         &mut self,
         request: Request,
     ) -> Result<
-        Response<V::ProposalResponse, V::VoteResponse, V::PubKeyResponse, V::PingResponse>,
+        Response<
+            V::ProposalResponse,
+            V::VoteResponse,
+            V::PubKeyResponse,
+            V::PingResponse,
+            V::BytesResponse,
+        >,
         SignerError,
     > {
         let response = match request {
@@ -63,10 +69,7 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
                 let signable_data = V::vote_to_bytes(&vote, &self.chain_id)?;
                 let signature = self.signer.sign(&signable_data)?;
                 let ext_signature = if vote.step == SignedMsgType::Precommit
-                    && vote
-                        .block_id
-                        .as_ref()
-                        .is_some_and(|id| !id.hash.is_empty())
+                    && vote.block_id.as_ref().is_some_and(|id| !id.hash.is_empty())
                 {
                     info!("it's a precommit with a non-nil block ID");
                     let extension_signable_data =
@@ -98,6 +101,10 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
                 Response::PublicKey(V::create_pub_key_response(public_key))
             }
             Request::Ping => Response::Ping(V::create_ping_response()),
+            Request::SignBytes(bytes) => {
+                let signature = self.signer.sign(&bytes)?;
+                Response::SignBytes(V::create_signed_bytes_response(signature))
+            }
         };
 
         Ok(response)
@@ -153,6 +160,7 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
             V::VoteResponse,
             V::PubKeyResponse,
             V::PingResponse,
+            V::BytesResponse,
         >,
     ) -> Result<(), SignerError> {
         let response_bytes = V::encode_response(response)?;

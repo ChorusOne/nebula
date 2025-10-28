@@ -19,6 +19,7 @@ pub trait ProtocolVersion {
     type VoteResponse;
     type PubKeyResponse;
     type PingResponse;
+    type BytesResponse;
 
     fn parse_request(msg: Vec<u8>) -> Result<(Request, String), SignerError>;
     fn encode_response(
@@ -27,6 +28,7 @@ pub trait ProtocolVersion {
             Self::VoteResponse,
             Self::PubKeyResponse,
             Self::PingResponse,
+            Self::BytesResponse,
         >,
     ) -> Result<Vec<u8>, SignerError>;
     fn proposal_to_bytes(proposal: &Proposal, chain_id: &str) -> Result<Vec<u8>, SignerError>;
@@ -45,4 +47,5 @@ pub trait ProtocolVersion {
     ) -> Self::VoteResponse;
     fn create_pub_key_response(pub_key: PublicKey) -> Self::PubKeyResponse;
     fn create_ping_response() -> Self::PingResponse;
+    fn create_signed_bytes_response(signature: Vec<u8>) -> Self::BytesResponse;
 }

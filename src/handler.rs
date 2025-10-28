@@ -24,7 +24,13 @@ impl<V: ProtocolVersion + Send + 'static> SigningHandler<V> {
         raft_node: &Arc<SignerRaftNode>,
         signing_lock: &Arc<Mutex<()>>,
     ) -> Result<
-        Response<V::ProposalResponse, V::VoteResponse, V::PubKeyResponse, V::PingResponse>,
+        Response<
+            V::ProposalResponse,
+            V::VoteResponse,
+            V::PubKeyResponse,
+            V::PingResponse,
+            V::BytesResponse,
+        >,
         SignerError,
     > {
         match request {

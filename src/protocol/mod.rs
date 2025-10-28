@@ -5,6 +5,7 @@ pub enum Request {
     SignProposal(Proposal),
     SignVote(Vote),
     ShowPublicKey,
+    SignBytes(Vec<u8>),
     Ping,
 }
 
@@ -23,14 +24,16 @@ impl fmt::Debug for Request {
             ),
             Request::ShowPublicKey => write!(f, "ShowPublicKey"),
             Request::Ping => write!(f, "Ping"),
+            Request::SignBytes(bytes) => write!(f, "SignBytes({:?})", bytes),
         }
     }
 }
 
 #[derive(Debug)]
-pub enum Response<P, V, K, G> {
+pub enum Response<P, V, K, G, B> {
     SignedProposal(P),
     SignedVote(V),
     PublicKey(K),
+    SignBytes(B),
     Ping(G),
 }
