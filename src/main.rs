@@ -120,20 +120,27 @@ fn start_signer(config: Config) -> Result<(), SignerError> {
                 });
             }
             let raft_cfg = raft.clone();
-            Arc::new(Mutex::new(PersistVariants::Raft(
-                raft_kv_store::start_kv_node::<ConsensusData>(NodeConfig {
-                    node_id: raft.node_id,
-                    peers: node_peers.clone(),
-                    bind_addr: raft_cfg.raft_addr,
-                    storage_path: raft_cfg.data_path,
-                    http_addr: raft_cfg.http_addr,
-                    linearizable: true,
-                    heartbeat_tick: 3,
-                    election_tick: 10,
-                    tick_interval_ms: 2,
-                })
-                .unwrap(),
-            )))
+            let http_addr = raft_cfg.http_addr.clone();
+
+            let kv_app = raft_kv_store::start_kv_node::<ConsensusData>(NodeConfig {
+                node_id: raft.node_id,
+                peers: node_peers.clone(),
+                bind_addr: raft_cfg.raft_addr,
+                storage_path: raft_cfg.data_path,
+                http_addr: http_addr,
+                linearizable: true,
+                heartbeat_tick: 3,
+                election_tick: 10,
+                tick_interval_ms: 2,
+            })
+            .unwrap();
+
+            let _http_handle = raft_kv_store::start_http_service::<ConsensusData>(
+                &raft_cfg.http_addr,
+                kv_app.handle(),
+            )?;
+
+            Arc::new(Mutex::new(PersistVariants::Raft(kv_app)))
         }
         PersistConfig::Local { local } => {
             info!("Local persistence path: {:?}", local.path);

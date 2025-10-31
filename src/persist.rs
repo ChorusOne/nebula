@@ -71,6 +71,9 @@ impl Persist for KvApp<ConsensusData> {
         Ok(PersistedRequest(request))
     }
     fn state(&self) -> ConsensusData {
-        self.handle().get("latest").unwrap().unwrap()
+        match self.handle().get("latest").unwrap() {
+            Some(state) => state,
+            None => ConsensusData::default(),
+        }
     }
 }
