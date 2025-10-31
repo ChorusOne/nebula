@@ -12,7 +12,8 @@ pub struct PeerConfig {
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct RaftConfig {
     pub node_id: u64,
-    pub bind_addr: String,
+    pub raft_addr: String,
+    pub http_addr: String,
     pub data_path: String,
     pub peers: Vec<PeerConfig>,
     pub initial_state_path: String,
@@ -87,13 +88,14 @@ impl Config {
             persist: PersistConfig::Raft {
                 raft: RaftConfig {
                     node_id: 1,
-                    bind_addr: "127.0.0.1:8080".to_string(),
+                    raft_addr: "127.0.0.1:8080".to_string(),
                     data_path: "./raft_data".to_string(),
                     peers: vec![PeerConfig {
                         id: 1,
                         addr: "127.0.0.1:8080".into(),
                     }],
                     initial_state_path: "./initial_state.json".to_string(),
+                    http_addr: "127.0.0.1:8081".to_string(),
                 },
             },
             signing: match backend {

@@ -1,5 +1,4 @@
 mod backend;
-mod cluster;
 mod config;
 mod connection;
 mod error;
@@ -15,11 +14,12 @@ use crate::backend::SigningBackend;
 use crate::error::SignerError;
 use crate::protocol::Response;
 use clap::{Parser as _, Subcommand};
-use cluster::SignerRaftNode;
 use config::{Config, PersistConfig, ProtocolVersionConfig};
 use log::{LevelFilter, debug, error, info, warn};
 use persist::{Persist, PersistVariants};
 use protocol::{CheckedProposalRequest, CheckedVoteRequest, Request, ValidRequest};
+use raft_kv_store::NodeConfig;
+use raft_kv_store::config::PeerConfig;
 use signer::Signer;
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -112,9 +112,28 @@ fn start_signer(config: Config) -> Result<(), SignerError> {
     let state_persist: Arc<Mutex<PersistVariants>> = match &config.persist {
         PersistConfig::Raft { raft } => {
             info!("Node ID: {}", raft.node_id);
-            Arc::new(Mutex::new(PersistVariants::Raft(SignerRaftNode::new(
-                raft.clone(),
-            ))))
+            let mut node_peers: Vec<PeerConfig> = vec![];
+            for peer in raft.peers.clone() {
+                node_peers.push(PeerConfig {
+                    id: peer.id,
+                    addr: peer.addr,
+                });
+            }
+            let raft_cfg = raft.clone();
+            Arc::new(Mutex::new(PersistVariants::Raft(
+                raft_kv_store::start_kv_node::<ConsensusData>(NodeConfig {
+                    node_id: raft.node_id,
+                    peers: node_peers.clone(),
+                    bind_addr: raft_cfg.raft_addr,
+                    storage_path: raft_cfg.data_path,
+                    http_addr: raft_cfg.http_addr,
+                    linearizable: true,
+                    heartbeat_tick: 3,
+                    election_tick: 10,
+                    tick_interval_ms: 2,
+                })
+                .unwrap(),
+            )))
         }
         PersistConfig::Local { local } => {
             info!("Local persistence path: {:?}", local.path);

@@ -1,7 +1,7 @@
-use crate::cluster::SignerRaftNode;
 use crate::protocol::ValidRequest;
 use crate::types::ConsensusData;
 use enum_dispatch::enum_dispatch;
+use raft_kv_store::KvApp;
 use std::path::PathBuf;
 
 #[derive(Debug)]
@@ -12,7 +12,7 @@ pub enum PersistError {
 
 #[enum_dispatch(Persist)]
 pub enum PersistVariants {
-    Raft(SignerRaftNode),
+    Raft(KvApp<ConsensusData>),
     Local(LocalState),
 }
 
@@ -62,18 +62,15 @@ impl Persist for LocalState {
     }
 }
 
-impl Persist for SignerRaftNode {
+impl Persist for KvApp<ConsensusData> {
     fn persist(&mut self, request: ValidRequest) -> Result<PersistedRequest, PersistError> {
-        if !self.is_leader() {
-            return Err(PersistError::InvalidState("Not the leader".into()));
-        }
         let state = ConsensusData::from(&request);
-        if let Err(e) = self.replicate_state(&state) {
+        if let Err(e) = self.handle().put("latest".to_string(), state) {
             return Err(PersistError::CouldNotPersist(e.to_string()));
         }
         Ok(PersistedRequest(request))
     }
     fn state(&self) -> ConsensusData {
-        *self.signer_state.read().unwrap()
+        self.handle().get("latest").unwrap().unwrap()
     }
 }

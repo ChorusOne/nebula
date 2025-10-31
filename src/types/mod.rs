@@ -176,6 +176,26 @@ pub struct ConsensusData {
     pub step: SignedMsgType,
 }
 
+use rusqlite::ToSql;
+use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, ValueRef};
+
+impl ToSql for ConsensusData {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        let bytes = bincode::serde::encode_to_vec(self, bincode::config::standard())
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        Ok(ToSqlOutput::from(bytes))
+    }
+}
+
+impl FromSql for ConsensusData {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        let bytes = value.as_blob()?;
+        let (data, _): (ConsensusData, usize) =
+            bincode::serde::decode_from_slice(bytes, bincode::config::standard())
+                .map_err(|e| FromSqlError::Other(Box::new(e)))?;
+        Ok(data)
+    }
+}
 impl From<&ValidRequest> for ConsensusData {
     fn from(value: &ValidRequest) -> Self {
         match value {
