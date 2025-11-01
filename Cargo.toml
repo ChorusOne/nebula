@@ -8,7 +8,6 @@ prost = "0.13"
 prost-types = "0.13"
 serde = { version = "1.0", features = ["derive"] }
 chrono = { version = "0.4", features = ["serde"] }
-ed25519-dalek = "2.1.1"
 tendermint-p2p = "0.40.4"
 ed25519-consensus = "2.1.0"
 rand_core = { version = "0.6.4", features = ["std"]}
@@ -22,20 +21,13 @@ serde_json = "1.0.140"
 reqwest = { version = "0.12.19", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 k256 = { version = "0.10", features = ["ecdsa"] }
 blst = "0.3"
-bls-signatures = "0.15.0"
 raft = "0.7.0"
 bytes = "1.10.1"
 slog = "2.7.0"
 slog-async = "2.8.0"
 slog-term = "2.9.1"
 bincode = { version = "2", features = ["serde"] }
-anyhow = "1.0.98"
-tiny_http = "0.12.0"
-rand = "0.9.1"
-rocksdb = "0.23.0"
-raft-proto = { version = "0.7.0", features = ["prost", "protobuf-codec"] }
 slog-stdlog = "4.1.1"
-protobuf = "2.28.0"
 byteorder = "1.5.0"
 enum_dispatch = "0.3.13"
 clap = { version = "4.5.45", features = ["derive"] }
