@@ -11,7 +11,7 @@ use raft::{Config as RaftCoreConfig, RawNode, StateRole, Storage};
 use slog::{Drain, o};
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufReader, BufWriter, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::{Arc, RwLock};
 use std::thread;
@@ -269,8 +269,9 @@ fn start_outbound_handler(
                 }
             };
 
+            let sockaddr: &SocketAddr = &addr.parse().expect("addr should be a valid sockaddr");
             if writer_opt.is_none() {
-                match TcpStream::connect(&*addr) {
+                match TcpStream::connect_timeout(sockaddr, Duration::from_millis(300)) {
                     Ok(stream) => {
                         stream
                             .set_write_timeout(Some(Duration::from_secs(1)))
