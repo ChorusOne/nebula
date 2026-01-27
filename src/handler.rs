@@ -59,7 +59,7 @@ impl<V: ProtocolVersion + Send + 'static> SigningHandler<V> {
                     )));
                 }
 
-                let current_state = *raft_node.signer_state.read().unwrap();
+                let current_state = raft_node.signer_state.read().unwrap().clone();
                 if !safeguards::should_sign_proposal(&current_state, &proposal) {
                     info!(
                         "Prevented double signing proposal at hrs: {}/{}/{}",
@@ -75,6 +75,8 @@ impl<V: ProtocolVersion + Send + 'static> SigningHandler<V> {
                         height: proposal.height,
                         round: proposal.round,
                         step: SignedMsgType::Proposal as u8,
+                        sign_data: todo!(),
+                        signature: todo!(),
                     };
 
                     if let Err(e) = raft_node.replicate_state(new_state) {
@@ -105,7 +107,7 @@ impl<V: ProtocolVersion + Send + 'static> SigningHandler<V> {
                     )));
                 }
 
-                let current_state = *raft_node.signer_state.read().unwrap();
+                let current_state = raft_node.signer_state.read().unwrap().clone();
                 if !safeguards::should_sign_vote(&current_state, &vote) {
                     info!(
                         "Prevented double signing vote at hrs: {}/{}/{}",
@@ -122,6 +124,8 @@ impl<V: ProtocolVersion + Send + 'static> SigningHandler<V> {
                         height: vote.height,
                         round: vote.round,
                         step: vote.step.into(),
+                        sign_data: todo!(),
+                        signature: todo!(),
                     };
 
                     if let Err(e) = raft_node.replicate_state(new_state) {

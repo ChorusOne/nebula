@@ -97,7 +97,7 @@ impl SignerRaftNode {
 
         let (tx, rx) = mpsc::channel();
         self.proposal_sender
-            .send(RaftMessage::Propose(new_state, tx))
+            .send(RaftMessage::Propose(new_state.clone(), tx))
             .map_err(|e| {
                 SignerError::Other(format!("Failed to send proposal to raft thread: {}", e))
             })?;
@@ -481,7 +481,7 @@ fn handle_committed_entries(
                             signer_state.read().unwrap(),
                             raft_group.raft.id,
                         );
-                        *signer_state.write().unwrap() = ns;
+                        *signer_state.write().unwrap() = ns.clone();
                         raft_group.mut_store().write_signer_state(&ns).unwrap();
 
                         if let Some(callback) = proposal_callbacks.pop_front() {

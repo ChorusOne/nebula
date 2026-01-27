@@ -117,6 +117,8 @@ fn should_sign_proposal_logic() {
         height: 10,
         round: 1,
         step: SignedMsgType::Proposal as u8,
+        sign_data: todo!(),
+        signature: todo!(),
     };
 
     let p1 = Proposal {
@@ -168,6 +170,8 @@ fn should_sign_vote_logic() {
         height: 10,
         round: 1,
         step: SignedMsgType::Proposal as u8,
+        sign_data: todo!(),
+        signature: todo!(),
     };
     let block_id = Some(crate::types::BlockId {
         hash: vec![1],
@@ -214,6 +218,8 @@ fn should_sign_vote_logic() {
         height: 10,
         round: 1,
         step: SignedMsgType::Prevote as u8,
+        sign_data: todo!(),
+        signature: todo!(),
     };
     assert!(should_sign_vote(&state_after_prevote, &v4));
 
@@ -221,6 +227,8 @@ fn should_sign_vote_logic() {
         height: 10,
         round: 1,
         step: SignedMsgType::Precommit as u8,
+        sign_data: todo!(),
+        signature: todo!(),
     };
     assert!(!should_sign_vote(&state_after_precommit, &v4));
 

@@ -169,11 +169,13 @@ impl From<KeyType> for String {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct ConsensusData {
     pub height: i64,
     pub round: i64,
     pub step: u8,
+    pub sign_data: Vec<u8>,
+    pub signature: Vec<u8>,
 }
 
 impl std::fmt::Display for ConsensusData {

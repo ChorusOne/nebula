@@ -67,6 +67,8 @@ fn single_node_cluster() {
         height: 100,
         round: 1,
         step: SignedMsgType::Proposal as u8,
+        sign_data: todo!(),
+        signature: todo!(),
     };
 
     let result = cluster.replicate_state(new_state.clone());
@@ -108,6 +110,8 @@ fn three_node_cluster_basic() {
         height: 200,
         round: 2,
         step: SignedMsgType::Prevote as u8,
+        sign_data: todo!(),
+        signature: todo!(),
     };
 
     let result = leader.replicate_state(new_state.clone());

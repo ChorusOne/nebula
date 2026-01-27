@@ -39,7 +39,7 @@ impl RocksDBStorage {
     }
 
     pub fn write_signer_state(&self, sm: &ConsensusData) -> raft::Result<()> {
-        let value = sm.to_bytes();
+        let value = sm.clone().to_bytes();
         let mut opts = rocksdb::WriteOptions::default();
         opts.set_sync(true);
         self.db
