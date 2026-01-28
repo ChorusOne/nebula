@@ -157,6 +157,26 @@ impl ProtocolVersion for VersionV1_0 {
         Ok(bytes)
     }
 
+    fn proposal_sign_bytes_only_differ_by_timestamp(
+        last_sign_bytes: &[u8],
+        new_sign_bytes: &[u8],
+    ) -> Result<bool, SignerError> {
+        let mut last = v1::types::CanonicalProposal::decode_length_delimited(last_sign_bytes)?;
+        let mut new = v1::types::CanonicalProposal::decode_length_delimited(new_sign_bytes)?;
+        new.timestamp = last.timestamp.clone();
+        Ok(new == last)
+    }
+
+    fn vote_sign_bytes_only_differ_by_timestamp(
+        last_sign_bytes: &[u8],
+        new_sign_bytes: &[u8],
+    ) -> Result<bool, SignerError> {
+        let mut last = v1::types::CanonicalVote::decode_length_delimited(last_sign_bytes)?;
+        let mut new = v1::types::CanonicalVote::decode_length_delimited(new_sign_bytes)?;
+        new.timestamp = last.timestamp.clone();
+        Ok(new == last)
+    }
+
     fn create_proposal_response(
         proposal: Option<Proposal>,
         signature: Vec<u8>,

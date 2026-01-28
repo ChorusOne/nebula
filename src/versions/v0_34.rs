@@ -39,6 +39,20 @@ impl ProtocolVersion for VersionV0_34 {
         todo!("v0.34")
     }
 
+    fn proposal_sign_bytes_only_differ_by_timestamp(
+        _last_sign_bytes: &[u8],
+        _new_sign_bytes: &[u8],
+    ) -> Result<bool, SignerError> {
+        todo!("v0.34")
+    }
+
+    fn vote_sign_bytes_only_differ_by_timestamp(
+        _last_sign_bytes: &[u8],
+        _new_sign_bytes: &[u8],
+    ) -> Result<bool, SignerError> {
+        todo!("v0.34")
+    }
+
     fn create_proposal_response(
         _proposal: Option<Proposal>,
         _signature: Vec<u8>,

@@ -13,7 +13,7 @@ use std::collections::{HashMap, VecDeque};
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -32,8 +32,22 @@ pub struct SignerRaftNode {
     pub signer_state: Arc<RwLock<ConsensusData>>,
     proposal_sender: Sender<RaftMessage>,
     raft_state: Arc<RwLock<(StateRole, u64)>>,
+    recent_signatures: Arc<Mutex<VecDeque<CachedSignature>>>,
     #[allow(dead_code)]
     shutdown_handle: Arc<RwLock<Option<thread::JoinHandle<()>>>>,
+}
+
+const RECENT_SIGNATURES_LIMIT: usize = 100;
+
+#[derive(Clone, Debug)]
+struct CachedSignature {
+    height: i64,
+    round: i64,
+    step: u8,
+    sign_data: Vec<u8>,
+    signature: Vec<u8>,
+    ext_sign_data: Vec<u8>,
+    ext_signature: Vec<u8>,
 }
 
 impl SignerRaftNode {
@@ -58,6 +72,7 @@ impl SignerRaftNode {
         let logger = stdlog_to_slog();
         let storage = create_storage(&config);
         let signer_state = Arc::new(RwLock::new(storage.read_signer_state().unwrap()));
+        let recent_signatures = Arc::new(Mutex::new(VecDeque::new()));
 
         let (in_tx, in_rx) = mpsc::channel::<RaftMessage>();
         let (out_tx, out_rx) = mpsc::channel::<RaftProtoMessage>();
@@ -81,8 +96,68 @@ impl SignerRaftNode {
             proposal_sender: in_tx,
             raft_state,
             node_id: config.node_id,
+            recent_signatures,
             shutdown_handle: Arc::new(RwLock::new(Some(handle))),
         })
+    }
+
+    pub fn cache_signature(
+        &self,
+        height: i64,
+        round: i64,
+        step: u8,
+        sign_data: Vec<u8>,
+        signature: Vec<u8>,
+        ext_sign_data: Vec<u8>,
+        ext_signature: Vec<u8>,
+    ) {
+        if sign_data.is_empty() || signature.is_empty() {
+            return;
+        }
+
+        let mut cache = self.recent_signatures.lock().unwrap();
+        cache.retain(|entry| {
+            !(entry.height == height
+                && entry.round == round
+                && entry.step == step
+                && entry.sign_data == sign_data
+                && entry.ext_sign_data == ext_sign_data)
+        });
+        cache.push_front(CachedSignature {
+            height,
+            round,
+            step,
+            sign_data,
+            signature,
+            ext_sign_data,
+            ext_signature,
+        });
+        while cache.len() > RECENT_SIGNATURES_LIMIT {
+            cache.pop_back();
+        }
+    }
+
+    pub fn find_cached_signature(
+        &self,
+        height: i64,
+        round: i64,
+        step: u8,
+        sign_data: &[u8],
+        ext_sign_data: &[u8],
+    ) -> Option<(Vec<u8>, Vec<u8>)> {
+        let cache = self.recent_signatures.lock().unwrap();
+        for entry in cache.iter() {
+            if entry.height == height
+                && entry.round == round
+                && entry.step == step
+                && entry.sign_data == sign_data
+                && entry.ext_sign_data == ext_sign_data
+                && !entry.signature.is_empty()
+            {
+                return Some((entry.signature.clone(), entry.ext_signature.clone()));
+            }
+        }
+        None
     }
 
     pub fn replicate_state(&self, new_state: ConsensusData) -> Result<(), SignerError> {

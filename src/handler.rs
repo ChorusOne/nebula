@@ -61,13 +61,115 @@ impl<V: ProtocolVersion + Send + 'static> SigningHandler<V> {
 
                 let sign_data = signer.proposal_sign_bytes(&proposal)?;
                 let current_state = raft_node.signer_state.read().unwrap().clone();
+                let step = SignedMsgType::Proposal as u8;
+
+                if let Some((signature, _)) = raft_node.find_cached_signature(
+                    proposal.height,
+                    proposal.round,
+                    step,
+                    &sign_data,
+                    &[],
+                ) {
+                    info!(
+                        "Replaying cached proposal signature at hrs: {}/{}/{}",
+                        proposal.height, proposal.round, proposal.step as u8
+                    );
+                    return Ok(Response::SignedProposal(V::create_proposal_response(
+                        Some(proposal),
+                        signature,
+                        None,
+                    )));
+                }
+
+                let is_same_hrs = current_state.height == proposal.height
+                    && current_state.round == proposal.round
+                    && current_state.step == step;
+
+                if is_same_hrs && !current_state.sign_data.is_empty() {
+                    if current_state.sign_data == sign_data && !current_state.signature.is_empty() {
+                        info!(
+                            "Replaying stored proposal signature at hrs: {}/{}/{}",
+                            proposal.height, proposal.round, proposal.step as u8
+                        );
+                        return Ok(Response::SignedProposal(V::create_proposal_response(
+                            Some(proposal),
+                            current_state.signature,
+                            None,
+                        )));
+                    }
+
+                    let only_ts = V::proposal_sign_bytes_only_differ_by_timestamp(
+                        &current_state.sign_data,
+                        &sign_data,
+                    )?;
+                    if only_ts {
+                        if !current_state.signature.is_empty() {
+                            raft_node.cache_signature(
+                                current_state.height,
+                                current_state.round,
+                                current_state.step,
+                                current_state.sign_data.clone(),
+                                current_state.signature.clone(),
+                                current_state.ext_sign_data.clone(),
+                                current_state.ext_signature.clone(),
+                            );
+                        }
+
+                        let signature = signer.sign_bytes(&sign_data)?;
+                        let new_state = ConsensusData {
+                            height: proposal.height,
+                            round: proposal.round,
+                            step,
+                            sign_data,
+                            signature: signature.clone(),
+                            ext_sign_data: Vec::new(),
+                            ext_signature: Vec::new(),
+                        };
+
+                        if let Err(e) = raft_node.replicate_state(new_state) {
+                            error!("CRITICAL: State replication failed: {}. Not signing.", e);
+                            return Ok(Response::SignedProposal(V::create_proposal_response(
+                                None,
+                                Vec::new(),
+                                Some(format!("Raft replication failed: {}", e)),
+                            )));
+                        }
+
+                        return Ok(Response::SignedProposal(V::create_proposal_response(
+                            Some(proposal),
+                            signature,
+                            None,
+                        )));
+                    }
+
+                    return Ok(Response::SignedProposal(V::create_proposal_response(
+                        None,
+                        Vec::new(),
+                        Some(
+                            "Sign bytes mismatch for same height/round/step; refusing replay"
+                                .into(),
+                        ),
+                    )));
+                }
 
                 if safeguards::should_sign_proposal(&current_state, &proposal) {
+                    if !current_state.signature.is_empty() && !current_state.sign_data.is_empty() {
+                        raft_node.cache_signature(
+                            current_state.height,
+                            current_state.round,
+                            current_state.step,
+                            current_state.sign_data.clone(),
+                            current_state.signature.clone(),
+                            current_state.ext_sign_data.clone(),
+                            current_state.ext_signature.clone(),
+                        );
+                    }
+
                     let signature = signer.sign_bytes(&sign_data)?;
                     let new_state = ConsensusData {
                         height: proposal.height,
                         round: proposal.round,
-                        step: SignedMsgType::Proposal as u8,
+                        step,
                         sign_data,
                         signature: signature.clone(),
                         ext_sign_data: Vec::new(),
@@ -88,33 +190,6 @@ impl<V: ProtocolVersion + Send + 'static> SigningHandler<V> {
                             None,
                         )))
                     }
-                } else if current_state.height == proposal.height
-                    && current_state.round == proposal.round
-                    && current_state.step == SignedMsgType::Proposal as u8
-                    && current_state.sign_data == sign_data
-                    && !current_state.signature.is_empty()
-                {
-                    info!(
-                        "Replaying stored proposal signature at hrs: {}/{}/{}",
-                        proposal.height, proposal.round, proposal.step as u8
-                    );
-                    Ok(Response::SignedProposal(V::create_proposal_response(
-                        Some(proposal),
-                        current_state.signature,
-                        None,
-                    )))
-                } else if current_state.height == proposal.height
-                    && current_state.round == proposal.round
-                    && current_state.step == SignedMsgType::Proposal as u8
-                {
-                    Ok(Response::SignedProposal(V::create_proposal_response(
-                        None,
-                        Vec::new(),
-                        Some(
-                            "Sign bytes mismatch for same height/round/step; refusing replay"
-                                .into(),
-                        ),
-                    )))
                 } else {
                     info!(
                         "Prevented double signing proposal at hrs: {}/{}/{}",
@@ -151,13 +226,169 @@ impl<V: ProtocolVersion + Send + 'static> SigningHandler<V> {
                 } else {
                     None
                 };
+                let ext_sign_data_bytes = ext_sign_data.as_deref().unwrap_or(&[]);
 
                 let current_state = raft_node.signer_state.read().unwrap().clone();
+                let step: u8 = vote.step.into();
+
+                if let Some((signature, ext_signature)) = raft_node.find_cached_signature(
+                    vote.height,
+                    vote.round,
+                    step,
+                    &sign_data,
+                    ext_sign_data_bytes,
+                ) {
+                    info!(
+                        "Replaying cached vote signature at hrs: {}/{}/{}",
+                        vote.height, vote.round, vote.step as u8
+                    );
+                    let ext_sig = if ext_signature.is_empty() {
+                        None
+                    } else {
+                        Some(ext_signature)
+                    };
+                    return Ok(Response::SignedVote(V::create_vote_response(
+                        Some(vote),
+                        signature,
+                        ext_sig,
+                        None,
+                    )));
+                }
+
+                let is_same_hrs =
+                    current_state.height == vote.height && current_state.round == vote.round
+                        && current_state.step == step;
+
+                if is_same_hrs && !current_state.sign_data.is_empty() {
+                    let ext_matches = ext_sign_data
+                        .as_ref()
+                        .map(|bytes| current_state.ext_sign_data == *bytes)
+                        .unwrap_or_else(|| {
+                            current_state.ext_sign_data.is_empty()
+                                && current_state.ext_signature.is_empty()
+                        });
+
+                    if current_state.sign_data == sign_data
+                        && !current_state.signature.is_empty()
+                        && ext_matches
+                    {
+                        info!(
+                            "Replaying stored vote signature at hrs: {}/{}/{}",
+                            vote.height, vote.round, vote.step as u8
+                        );
+                        let ext_signature = if current_state.ext_signature.is_empty() {
+                            None
+                        } else {
+                            Some(current_state.ext_signature.clone())
+                        };
+                        return Ok(Response::SignedVote(V::create_vote_response(
+                            Some(vote),
+                            current_state.signature,
+                            ext_signature,
+                            None,
+                        )));
+                    }
+
+                    let only_ts = V::vote_sign_bytes_only_differ_by_timestamp(
+                        &current_state.sign_data,
+                        &sign_data,
+                    )?;
+                    if only_ts {
+                        if ext_sign_data.is_some() && !ext_matches {
+                            return Ok(Response::SignedVote(V::create_vote_response(
+                                None,
+                                Vec::new(),
+                                None,
+                                Some(
+                                    "Vote extension sign bytes mismatch for same height/round/step; refusing replay"
+                                        .into(),
+                                ),
+                            )));
+                        }
+
+                        if !current_state.signature.is_empty() {
+                            raft_node.cache_signature(
+                                current_state.height,
+                                current_state.round,
+                                current_state.step,
+                                current_state.sign_data.clone(),
+                                current_state.signature.clone(),
+                                current_state.ext_sign_data.clone(),
+                                current_state.ext_signature.clone(),
+                            );
+                        }
+
+                        let signature = signer.sign_bytes(&sign_data)?;
+                        let ext_signature = match ext_sign_data.as_ref() {
+                            Some(bytes) => {
+                                if current_state.ext_sign_data == *bytes
+                                    && !current_state.ext_signature.is_empty()
+                                {
+                                    Some(current_state.ext_signature.clone())
+                                } else {
+                                    Some(signer.sign_bytes(bytes)?)
+                                }
+                            }
+                            None => None,
+                        };
+                        let new_state = ConsensusData {
+                            height: vote.height,
+                            round: vote.round,
+                            step,
+                            sign_data,
+                            signature: signature.clone(),
+                            ext_sign_data: ext_sign_data.clone().unwrap_or_default(),
+                            ext_signature: ext_signature.clone().unwrap_or_default(),
+                        };
+
+                        if let Err(e) = raft_node.replicate_state(new_state) {
+                            error!("CRITICAL: State replication failed: {}. Not signing.", e);
+                            return Ok(Response::SignedVote(V::create_vote_response(
+                                None,
+                                Vec::new(),
+                                None,
+                                Some(format!("Raft replication failed: {}", e)),
+                            )));
+                        }
+
+                        return Ok(Response::SignedVote(V::create_vote_response(
+                            Some(vote),
+                            signature,
+                            ext_signature,
+                            None,
+                        )));
+                    }
+
+                    return Ok(Response::SignedVote(V::create_vote_response(
+                        None,
+                        Vec::new(),
+                        None,
+                        Some(
+                            "Sign bytes mismatch for same height/round/step; refusing replay"
+                                .into(),
+                        ),
+                    )));
+                }
+
                 match safeguards::should_sign_vote(&current_state, &vote) {
                     VoteCheckResult {
                         resend_signature: false,
                         should_sign: true,
                     } => {
+                        if !current_state.signature.is_empty()
+                            && !current_state.sign_data.is_empty()
+                        {
+                            raft_node.cache_signature(
+                                current_state.height,
+                                current_state.round,
+                                current_state.step,
+                                current_state.sign_data.clone(),
+                                current_state.signature.clone(),
+                                current_state.ext_sign_data.clone(),
+                                current_state.ext_signature.clone(),
+                            );
+                        }
+
                         let signature = signer.sign_bytes(&sign_data)?;
                         let ext_signature = match ext_sign_data.as_ref() {
                             Some(bytes) => Some(signer.sign_bytes(bytes)?),
@@ -166,7 +397,7 @@ impl<V: ProtocolVersion + Send + 'static> SigningHandler<V> {
                         let new_state = ConsensusData {
                             height: vote.height,
                             round: vote.round,
-                            step: vote.step.into(),
+                            step,
                             sign_data,
                             signature: signature.clone(),
                             ext_sign_data: ext_sign_data.clone().unwrap_or_default(),
@@ -194,39 +425,6 @@ impl<V: ProtocolVersion + Send + 'static> SigningHandler<V> {
                         resend_signature: true,
                         should_sign: false,
                     } => {
-                        let state_matches = current_state.height == vote.height
-                            && current_state.round == vote.round
-                            && current_state.step == vote.step as u8
-                            && current_state.sign_data == sign_data;
-                        let ext_matches = match ext_sign_data.as_ref() {
-                            Some(bytes) => {
-                                current_state.ext_sign_data == *bytes
-                                    && !current_state.ext_signature.is_empty()
-                            }
-                            None => {
-                                current_state.ext_sign_data.is_empty()
-                                    && current_state.ext_signature.is_empty()
-                            }
-                        };
-
-                        if state_matches && ext_matches && !current_state.signature.is_empty() {
-                            info!(
-                                "Replaying stored vote signature at hrs: {}/{}/{}",
-                                vote.height, vote.round, vote.step as u8
-                            );
-                            let ext_signature = if current_state.ext_signature.is_empty() {
-                                None
-                            } else {
-                                Some(current_state.ext_signature.clone())
-                            };
-                            return Ok(Response::SignedVote(V::create_vote_response(
-                                Some(vote),
-                                current_state.signature,
-                                ext_signature,
-                                None,
-                            )));
-                        }
-
                         return Ok(Response::SignedVote(V::create_vote_response(
                             None,
                             Vec::new(),
