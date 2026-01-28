@@ -116,6 +116,51 @@ impl RocksDBStorage {
             .map_err(|e| RaftError::Store(StorageError::Other(Box::new(e))))?;
         Ok(())
     }
+
+    pub fn compact(&mut self, compact_index: u64) -> raft::Result<()> {
+        let first_index = self.first_index()?;
+        let last_index = self.last_index()?;
+
+        if compact_index <= first_index {
+            return Ok(());
+        }
+
+        if compact_index > last_index + 1 {
+            panic!(
+                "compact not received raft logs: {}, last index: {}",
+                compact_index, last_index
+            );
+        }
+
+        let snap_term = self.term(compact_index - 1)?;
+
+        let mut hs = self.initial_state()?.hard_state;
+        hs.set_commit(compact_index - 1);
+        hs.set_term(snap_term);
+        self.set_hard_state(hs)?;
+
+        let mut opts = rocksdb::WriteOptions::default();
+        opts.set_sync(true);
+        for idx in first_index..compact_index {
+            self.db
+                .delete_opt(entry_key(idx), &opts)
+                .map_err(|e| RaftError::Store(StorageError::Other(Box::new(e))))?;
+        }
+
+        Ok(())
+    }
+
+    pub fn compact_to_keep_last(&mut self, keep: u64) -> raft::Result<()> {
+        if keep == 0 {
+            return Ok(());
+        }
+        let last_index = self.last_index()?;
+        if last_index == 0 || last_index + 1 <= keep {
+            return Ok(());
+        }
+        let compact_index = last_index + 1 - keep;
+        self.compact(compact_index)
+    }
 }
 
 impl Storage for RocksDBStorage {

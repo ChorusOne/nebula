@@ -251,6 +251,9 @@ fn create_storage(config: &RaftConfig) -> RocksDBStorage {
         bootstrap_storage(&mut storage, peer_ids, &config.initial_state_path);
     } else {
         info!("found existing state, loading from DB");
+        if let Err(e) = storage.compact_to_keep_last(100) {
+            warn!("failed to compact raft log on startup: {}", e);
+        }
     }
 
     storage
