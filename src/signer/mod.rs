@@ -50,8 +50,8 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
     > {
         let response = match request {
             Request::SignProposal(proposal) => {
-                let signable_data = V::proposal_to_bytes(&proposal, &self.chain_id)?;
-                let signature = self.signer.sign(&signable_data)?;
+                let signable_data = self.proposal_sign_bytes(&proposal)?;
+                let signature = self.sign_bytes(&signable_data)?;
                 debug!("Signature: {}", hex::encode(&signature));
                 debug!("Signable data: {}", hex::encode(&signable_data));
 
@@ -66,15 +66,14 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
                 // ^ no chain_id in the request. if we configure wrong chain_id in the config
                 // ^ actually it IS in the request and it IS in the canonical vote / proposal
                 // i just dropped it somewhere
-                let signable_data = V::vote_to_bytes(&vote, &self.chain_id)?;
-                let signature = self.signer.sign(&signable_data)?;
+                let signable_data = self.vote_sign_bytes(&vote)?;
+                let signature = self.sign_bytes(&signable_data)?;
                 let ext_signature = if vote.step == SignedMsgType::Precommit
                     && vote.block_id.as_ref().is_some_and(|id| !id.hash.is_empty())
                 {
                     info!("it's a precommit with a non-nil block ID");
-                    let extension_signable_data =
-                        V::vote_extension_to_bytes(&vote, &self.chain_id)?;
-                    let ext_sig = self.signer.sign(&extension_signable_data)?;
+                    let extension_signable_data = self.vote_ext_sign_bytes(&vote)?;
+                    let ext_sig = self.sign_bytes(&extension_signable_data)?;
                     debug!(
                         "Extension signable data: {}",
                         hex::encode(&extension_signable_data)
@@ -102,12 +101,28 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
             }
             Request::Ping => Response::Ping(V::create_ping_response()),
             Request::SignBytes(bytes) => {
-                let signature = self.signer.sign(&bytes)?;
+                let signature = self.sign_bytes(&bytes)?;
                 Response::SignBytes(V::create_signed_bytes_response(signature))
             }
         };
 
         Ok(response)
+    }
+
+    pub fn proposal_sign_bytes(&self, proposal: &crate::types::Proposal) -> Result<Vec<u8>, SignerError> {
+        V::proposal_to_bytes(proposal, &self.chain_id)
+    }
+
+    pub fn vote_sign_bytes(&self, vote: &crate::types::Vote) -> Result<Vec<u8>, SignerError> {
+        V::vote_to_bytes(vote, &self.chain_id)
+    }
+
+    pub fn vote_ext_sign_bytes(&self, vote: &crate::types::Vote) -> Result<Vec<u8>, SignerError> {
+        V::vote_extension_to_bytes(vote, &self.chain_id)
+    }
+
+    pub fn sign_bytes(&mut self, data: &[u8]) -> Result<Vec<u8>, SignerError> {
+        self.signer.sign(data)
     }
 
     pub fn read_request(&mut self) -> Result<Request, SignerError> {

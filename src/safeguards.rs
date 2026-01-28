@@ -49,7 +49,11 @@ In other words, a vote should only be signed if it’s:
   - a prevote for the same height and round where we haven’t signed a prevote or precommit (but have signed a proposal)
   - a precommit for the same height and round where we haven’t signed a precommit (but have signed a proposal and/or a prevote)
 */
-pub fn should_sign_vote(state: &ConsensusData, vote: &Vote) -> bool {
+pub struct VoteCheckResult {
+    pub should_sign: bool,
+    pub resend_signature: bool,
+}
+pub fn should_sign_vote(state: &ConsensusData, vote: &Vote) -> VoteCheckResult {
     info!(
         "checking if vote should be signed, state: {}, vote: {}/{}/{}",
         state, vote.height, vote.round, vote.step as u8
@@ -62,23 +66,46 @@ pub fn should_sign_vote(state: &ConsensusData, vote: &Vote) -> bool {
         state.step.into(),
     ) {
         // (1)
-        (Ordering::Greater, _, _, _) => true,
+        (Ordering::Greater, _, _, _) => VoteCheckResult {
+            should_sign: true,
+            resend_signature: false,
+        },
 
         // (2)
-        (Ordering::Equal, Ordering::Greater, _, _) => true,
+        (Ordering::Equal, Ordering::Greater, _, _) => VoteCheckResult {
+            should_sign: true,
+            resend_signature: false,
+        },
 
         // (3)
-        (Ordering::Equal, Ordering::Equal, SignedMsgType::Prevote, SignedMsgType::Proposal) => true,
-
+        (Ordering::Equal, Ordering::Equal, SignedMsgType::Prevote, SignedMsgType::Proposal) => {
+            VoteCheckResult {
+                should_sign: true,
+                resend_signature: false,
+            }
+        }
         // (4)
         (Ordering::Equal, Ordering::Equal, SignedMsgType::Precommit, stp)
             if stp != SignedMsgType::Precommit =>
         {
-            true
+            VoteCheckResult {
+                should_sign: true,
+                resend_signature: false,
+            }
         }
 
+        // Same H/R/S => reuse signature
+        (Ordering::Equal, Ordering::Equal, _, _) if state.step == vote_step as u8 => {
+            VoteCheckResult {
+                should_sign: false,
+                resend_signature: true,
+            }
+        }
         // everything else: don't sign
-        _ => false,
+        _ => VoteCheckResult {
+            should_sign: false,
+            resend_signature: false,
+        },
     }
 }
 
@@ -117,8 +144,10 @@ fn should_sign_proposal_logic() {
         height: 10,
         round: 1,
         step: SignedMsgType::Proposal as u8,
-        sign_data: todo!(),
-        signature: todo!(),
+        sign_data: Vec::new(),
+        signature: Vec::new(),
+        ext_sign_data: Vec::new(),
+        ext_signature: Vec::new(),
     };
 
     let p1 = Proposal {
@@ -170,8 +199,10 @@ fn should_sign_vote_logic() {
         height: 10,
         round: 1,
         step: SignedMsgType::Proposal as u8,
-        sign_data: todo!(),
-        signature: todo!(),
+        sign_data: Vec::new(),
+        signature: Vec::new(),
+        ext_sign_data: Vec::new(),
+        ext_signature: Vec::new(),
     };
     let block_id = Some(crate::types::BlockId {
         hash: vec![1],
@@ -187,7 +218,8 @@ fn should_sign_vote_logic() {
         step: SignedMsgType::Prevote,
         ..Default::default()
     };
-    assert!(should_sign_vote(&state, &v1));
+    let res = should_sign_vote(&state, &v1);
+    assert!(res.should_sign);
 
     let v2 = Vote {
         height: 10,
@@ -195,7 +227,9 @@ fn should_sign_vote_logic() {
         step: SignedMsgType::Prevote,
         ..Default::default()
     };
-    assert!(should_sign_vote(&state, &v2));
+
+    let res = should_sign_vote(&state, &v2);
+    assert!(res.should_sign);
 
     let v3 = Vote {
         height: 10,
@@ -203,7 +237,8 @@ fn should_sign_vote_logic() {
         step: SignedMsgType::Prevote,
         ..Default::default()
     };
-    assert!(should_sign_vote(&state, &v3));
+    let res = should_sign_vote(&state, &v3);
+    assert!(res.should_sign);
 
     let v4 = Vote {
         height: 10,
@@ -212,27 +247,35 @@ fn should_sign_vote_logic() {
         block_id: block_id.clone(),
         ..Default::default()
     };
-    assert!(should_sign_vote(&state, &v4));
+    let res = should_sign_vote(&state, &v4);
+    assert!(res.should_sign);
 
     let state_after_prevote = ConsensusData {
         height: 10,
         round: 1,
         step: SignedMsgType::Prevote as u8,
-        sign_data: todo!(),
-        signature: todo!(),
+        sign_data: Vec::new(),
+        signature: Vec::new(),
+        ext_sign_data: Vec::new(),
+        ext_signature: Vec::new(),
     };
-    assert!(should_sign_vote(&state_after_prevote, &v4));
+    let res = should_sign_vote(&state_after_prevote, &v4);
+    assert!(res.should_sign);
 
     let state_after_precommit = ConsensusData {
         height: 10,
         round: 1,
         step: SignedMsgType::Precommit as u8,
-        sign_data: todo!(),
-        signature: todo!(),
+        sign_data: Vec::new(),
+        signature: Vec::new(),
+        ext_sign_data: Vec::new(),
+        ext_signature: Vec::new(),
     };
-    assert!(!should_sign_vote(&state_after_precommit, &v4));
+    let res = should_sign_vote(&state_after_precommit, &v4);
+    assert!(!res.should_sign);
 
-    assert!(!should_sign_vote(&state_after_prevote, &v3));
+    let res = should_sign_vote(&state_after_prevote, &v3);
+    assert!(!res.should_sign);
 
     let v5 = Vote {
         height: 9,
@@ -240,5 +283,6 @@ fn should_sign_vote_logic() {
         step: SignedMsgType::Prevote,
         ..Default::default()
     };
-    assert!(!should_sign_vote(&state, &v5));
+    let res = should_sign_vote(&state, &v5);
+    assert!(!res.should_sign);
 }

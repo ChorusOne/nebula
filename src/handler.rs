@@ -2,7 +2,7 @@ use crate::backend::SigningBackend;
 use crate::cluster::SignerRaftNode;
 use crate::error::SignerError;
 use crate::protocol::{Request, Response};
-use crate::safeguards;
+use crate::safeguards::{self, VoteCheckResult};
 use crate::signer::Signer;
 use crate::types::{ConsensusData, SignedMsgType};
 use crate::versions::ProtocolVersion;
@@ -59,24 +59,19 @@ impl<V: ProtocolVersion + Send + 'static> SigningHandler<V> {
                     )));
                 }
 
+                let sign_data = signer.proposal_sign_bytes(&proposal)?;
                 let current_state = raft_node.signer_state.read().unwrap().clone();
-                if !safeguards::should_sign_proposal(&current_state, &proposal) {
-                    info!(
-                        "Prevented double signing proposal at hrs: {}/{}/{}",
-                        proposal.height, proposal.round, proposal.step as u8
-                    );
-                    Ok(Response::SignedProposal(V::create_proposal_response(
-                        None,
-                        Vec::new(),
-                        Some("Would double-sign proposal at same height/round/step".into()),
-                    )))
-                } else {
+
+                if safeguards::should_sign_proposal(&current_state, &proposal) {
+                    let signature = signer.sign_bytes(&sign_data)?;
                     let new_state = ConsensusData {
                         height: proposal.height,
                         round: proposal.round,
                         step: SignedMsgType::Proposal as u8,
-                        sign_data: todo!(),
-                        signature: todo!(),
+                        sign_data,
+                        signature: signature.clone(),
+                        ext_sign_data: Vec::new(),
+                        ext_signature: Vec::new(),
                     };
 
                     if let Err(e) = raft_node.replicate_state(new_state) {
@@ -87,8 +82,49 @@ impl<V: ProtocolVersion + Send + 'static> SigningHandler<V> {
                             Some(format!("Raft replication failed: {}", e)),
                         )))
                     } else {
-                        signer.sign_request_and_build_response(Request::SignProposal(proposal))
+                        Ok(Response::SignedProposal(V::create_proposal_response(
+                            Some(proposal),
+                            signature,
+                            None,
+                        )))
                     }
+                } else if current_state.height == proposal.height
+                    && current_state.round == proposal.round
+                    && current_state.step == SignedMsgType::Proposal as u8
+                    && current_state.sign_data == sign_data
+                    && !current_state.signature.is_empty()
+                {
+                    info!(
+                        "Replaying stored proposal signature at hrs: {}/{}/{}",
+                        proposal.height, proposal.round, proposal.step as u8
+                    );
+                    Ok(Response::SignedProposal(V::create_proposal_response(
+                        Some(proposal),
+                        current_state.signature,
+                        None,
+                    )))
+                } else if current_state.height == proposal.height
+                    && current_state.round == proposal.round
+                    && current_state.step == SignedMsgType::Proposal as u8
+                {
+                    Ok(Response::SignedProposal(V::create_proposal_response(
+                        None,
+                        Vec::new(),
+                        Some(
+                            "Sign bytes mismatch for same height/round/step; refusing replay"
+                                .into(),
+                        ),
+                    )))
+                } else {
+                    info!(
+                        "Prevented double signing proposal at hrs: {}/{}/{}",
+                        proposal.height, proposal.round, proposal.step as u8
+                    );
+                    Ok(Response::SignedProposal(V::create_proposal_response(
+                        None,
+                        Vec::new(),
+                        Some("Would double-sign proposal at same height/round/step".into()),
+                    )))
                 }
             }
 
@@ -107,37 +143,118 @@ impl<V: ProtocolVersion + Send + 'static> SigningHandler<V> {
                     )));
                 }
 
-                let current_state = raft_node.signer_state.read().unwrap().clone();
-                if !safeguards::should_sign_vote(&current_state, &vote) {
-                    info!(
-                        "Prevented double signing vote at hrs: {}/{}/{}",
-                        vote.height, vote.round, vote.step as u8
-                    );
-                    Ok(Response::SignedVote(V::create_vote_response(
-                        None,
-                        Vec::new(),
-                        None,
-                        Some("Would double-sign vote at same height/round".into()),
-                    )))
+                let sign_data = signer.vote_sign_bytes(&vote)?;
+                let has_vote_ext = vote.step == SignedMsgType::Precommit
+                    && vote.block_id.as_ref().is_some_and(|id| !id.hash.is_empty());
+                let ext_sign_data = if has_vote_ext {
+                    Some(signer.vote_ext_sign_bytes(&vote)?)
                 } else {
-                    let new_state = ConsensusData {
-                        height: vote.height,
-                        round: vote.round,
-                        step: vote.step.into(),
-                        sign_data: todo!(),
-                        signature: todo!(),
-                    };
+                    None
+                };
 
-                    if let Err(e) = raft_node.replicate_state(new_state) {
-                        error!("CRITICAL: State replication failed: {}. Not signing.", e);
-                        Ok(Response::SignedVote(V::create_vote_response(
+                let current_state = raft_node.signer_state.read().unwrap().clone();
+                match safeguards::should_sign_vote(&current_state, &vote) {
+                    VoteCheckResult {
+                        resend_signature: false,
+                        should_sign: true,
+                    } => {
+                        let signature = signer.sign_bytes(&sign_data)?;
+                        let ext_signature = match ext_sign_data.as_ref() {
+                            Some(bytes) => Some(signer.sign_bytes(bytes)?),
+                            None => None,
+                        };
+                        let new_state = ConsensusData {
+                            height: vote.height,
+                            round: vote.round,
+                            step: vote.step.into(),
+                            sign_data,
+                            signature: signature.clone(),
+                            ext_sign_data: ext_sign_data.clone().unwrap_or_default(),
+                            ext_signature: ext_signature.clone().unwrap_or_default(),
+                        };
+
+                        if let Err(e) = raft_node.replicate_state(new_state) {
+                            error!("CRITICAL: State replication failed: {}. Not signing.", e);
+                            return Ok(Response::SignedVote(V::create_vote_response(
+                                None,
+                                Vec::new(),
+                                None,
+                                Some(format!("Raft replication failed: {}", e)),
+                            )));
+                        } else {
+                            return Ok(Response::SignedVote(V::create_vote_response(
+                                Some(vote),
+                                signature,
+                                ext_signature,
+                                None,
+                            )));
+                        }
+                    }
+                    VoteCheckResult {
+                        resend_signature: true,
+                        should_sign: false,
+                    } => {
+                        let state_matches = current_state.height == vote.height
+                            && current_state.round == vote.round
+                            && current_state.step == vote.step as u8
+                            && current_state.sign_data == sign_data;
+                        let ext_matches = match ext_sign_data.as_ref() {
+                            Some(bytes) => {
+                                current_state.ext_sign_data == *bytes
+                                    && !current_state.ext_signature.is_empty()
+                            }
+                            None => {
+                                current_state.ext_sign_data.is_empty()
+                                    && current_state.ext_signature.is_empty()
+                            }
+                        };
+
+                        if state_matches && ext_matches && !current_state.signature.is_empty() {
+                            info!(
+                                "Replaying stored vote signature at hrs: {}/{}/{}",
+                                vote.height, vote.round, vote.step as u8
+                            );
+                            let ext_signature = if current_state.ext_signature.is_empty() {
+                                None
+                            } else {
+                                Some(current_state.ext_signature.clone())
+                            };
+                            return Ok(Response::SignedVote(V::create_vote_response(
+                                Some(vote),
+                                current_state.signature,
+                                ext_signature,
+                                None,
+                            )));
+                        }
+
+                        return Ok(Response::SignedVote(V::create_vote_response(
                             None,
                             Vec::new(),
                             None,
-                            Some(format!("Raft replication failed: {}", e)),
-                        )))
-                    } else {
-                        signer.sign_request_and_build_response(Request::SignVote(vote))
+                            Some(
+                                "Sign bytes mismatch for same height/round/step; refusing replay"
+                                    .into(),
+                            ),
+                        )));
+                    }
+                    VoteCheckResult {
+                        resend_signature: true,
+                        should_sign: true,
+                    } => unreachable!(),
+                    VoteCheckResult {
+                        resend_signature: false,
+                        should_sign: false,
+                    } => {
+                        info!(
+                            "Prevented double signing vote at hrs: {}/{}/{}",
+                            vote.height, vote.round, vote.step as u8
+                        );
+                        return Ok(Response::SignedVote(V::create_vote_response(
+                            None,
+                            Vec::new(),
+                            None,
+                            Some("Would double-sign vote at same height/round".into()),
+                        )));
                     }
                 }
             }
@@ -168,5 +285,207 @@ impl<V: ProtocolVersion + Send + 'static> SigningHandler<V> {
         info!("Sending the response took: {:?}", start.elapsed());
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::{PublicKey, SigningBackend};
+    use crate::cluster::SignerRaftNode;
+    use crate::config::{PeerConfig, RaftConfig};
+    use crate::types::{BlockId, KeyType, PartSetHeader, Proposal, Vote};
+    use crate::versions::VersionV1_0;
+    use std::io::Cursor;
+    use std::sync::{Arc, Mutex};
+    use std::thread;
+    use std::time::{Duration, Instant};
+    use tempfile::TempDir;
+
+    struct DummyBackend;
+
+    impl SigningBackend for DummyBackend {
+        fn sign(&mut self, data: &[u8]) -> Result<Vec<u8>, SignerError> {
+            let mut sig = data.to_vec();
+            sig.extend_from_slice(b":sig");
+            Ok(sig)
+        }
+
+        fn public_key(&self) -> Result<PublicKey, SignerError> {
+            Ok(PublicKey {
+                bytes: vec![0u8; 32],
+                key_type: KeyType::Ed25519,
+            })
+        }
+    }
+
+    fn create_single_node_cluster(base_port: u16) -> (Arc<SignerRaftNode>, TempDir) {
+        let temp_dir = TempDir::new().unwrap();
+        let node_id = 1u64;
+        let peers = vec![PeerConfig {
+            id: node_id,
+            addr: format!("127.0.0.1:{}", base_port + node_id as u16),
+        }];
+
+        let config = RaftConfig {
+            node_id,
+            bind_addr: format!("127.0.0.1:{}", base_port + node_id as u16),
+            data_path: temp_dir
+                .path()
+                .join(format!("node_{}", node_id))
+                .to_str()
+                .unwrap()
+                .to_string(),
+            peers,
+            initial_state_path: "./test_consensus_state.json".to_string(),
+        };
+
+        let cluster = SignerRaftNode::new(config);
+
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_secs(5) {
+            if cluster.is_leader() {
+                return (cluster, temp_dir);
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+
+        panic!("leader not elected in time");
+    }
+
+    fn extract_proposal_signature(
+        resp: Response<
+            <VersionV1_0 as ProtocolVersion>::ProposalResponse,
+            <VersionV1_0 as ProtocolVersion>::VoteResponse,
+            <VersionV1_0 as ProtocolVersion>::PubKeyResponse,
+            <VersionV1_0 as ProtocolVersion>::PingResponse,
+            <VersionV1_0 as ProtocolVersion>::BytesResponse,
+        >,
+    ) -> Vec<u8> {
+        match resp {
+            Response::SignedProposal(resp) => resp
+                .proposal
+                .expect("expected proposal")
+                .signature
+                .to_vec(),
+            other => panic!("unexpected response: {:?}", other),
+        }
+    }
+
+    fn extract_vote_signatures(
+        resp: Response<
+            <VersionV1_0 as ProtocolVersion>::ProposalResponse,
+            <VersionV1_0 as ProtocolVersion>::VoteResponse,
+            <VersionV1_0 as ProtocolVersion>::PubKeyResponse,
+            <VersionV1_0 as ProtocolVersion>::PingResponse,
+            <VersionV1_0 as ProtocolVersion>::BytesResponse,
+        >,
+    ) -> (Vec<u8>, Vec<u8>) {
+        match resp {
+            Response::SignedVote(resp) => {
+                let vote = resp.vote.expect("expected vote");
+                (vote.signature.to_vec(), vote.extension_signature.to_vec())
+            }
+            other => panic!("unexpected response: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn replay_proposal_signature_on_exact_match() {
+        let (raft_node, _temp_dir) = create_single_node_cluster(18000);
+        let signing_lock = Arc::new(Mutex::new(()));
+        let mut signer = Signer::<DummyBackend, VersionV1_0, Cursor<Vec<u8>>>::new(
+            DummyBackend,
+            Cursor::new(Vec::new()),
+            "test-chain".to_string(),
+        );
+
+        let proposal = Proposal {
+            step: SignedMsgType::Proposal,
+            height: 10,
+            round: 0,
+            ..Default::default()
+        };
+
+        let resp1 = SigningHandler::<VersionV1_0>::process_request(
+            &mut signer,
+            Request::SignProposal(proposal.clone()),
+            &raft_node,
+            &signing_lock,
+        )
+        .unwrap();
+        let sig1 = extract_proposal_signature(resp1);
+
+        let resp2 = SigningHandler::<VersionV1_0>::process_request(
+            &mut signer,
+            Request::SignProposal(proposal.clone()),
+            &raft_node,
+            &signing_lock,
+        )
+        .unwrap();
+        let sig2 = extract_proposal_signature(resp2);
+
+        assert_eq!(sig1, sig2);
+
+        let state = raft_node.signer_state.read().unwrap().clone();
+        let sign_data = signer.proposal_sign_bytes(&proposal).unwrap();
+        assert_eq!(state.sign_data, sign_data);
+        assert_eq!(state.signature, sig1);
+    }
+
+    #[test]
+    fn replay_vote_signature_with_extension_on_exact_match() {
+        let (raft_node, _temp_dir) = create_single_node_cluster(18100);
+        let signing_lock = Arc::new(Mutex::new(()));
+        let mut signer = Signer::<DummyBackend, VersionV1_0, Cursor<Vec<u8>>>::new(
+            DummyBackend,
+            Cursor::new(Vec::new()),
+            "test-chain".to_string(),
+        );
+
+        let vote = Vote {
+            step: SignedMsgType::Precommit,
+            height: 11,
+            round: 1,
+            block_id: Some(BlockId {
+                hash: vec![1, 2, 3],
+                parts: Some(PartSetHeader {
+                    total: 1,
+                    hash: vec![4, 5, 6],
+                }),
+            }),
+            extension: vec![9, 9, 9],
+            ..Default::default()
+        };
+
+        let resp1 = SigningHandler::<VersionV1_0>::process_request(
+            &mut signer,
+            Request::SignVote(vote.clone()),
+            &raft_node,
+            &signing_lock,
+        )
+        .unwrap();
+        let (sig1, ext_sig1) = extract_vote_signatures(resp1);
+        assert!(!ext_sig1.is_empty());
+
+        let resp2 = SigningHandler::<VersionV1_0>::process_request(
+            &mut signer,
+            Request::SignVote(vote.clone()),
+            &raft_node,
+            &signing_lock,
+        )
+        .unwrap();
+        let (sig2, ext_sig2) = extract_vote_signatures(resp2);
+
+        assert_eq!(sig1, sig2);
+        assert_eq!(ext_sig1, ext_sig2);
+
+        let state = raft_node.signer_state.read().unwrap().clone();
+        let sign_data = signer.vote_sign_bytes(&vote).unwrap();
+        let ext_sign_data = signer.vote_ext_sign_bytes(&vote).unwrap();
+        assert_eq!(state.sign_data, sign_data);
+        assert_eq!(state.signature, sig1);
+        assert_eq!(state.ext_sign_data, ext_sign_data);
+        assert_eq!(state.ext_signature, ext_sig1);
     }
 }
