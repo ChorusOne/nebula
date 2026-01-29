@@ -3,7 +3,7 @@ use log::info;
 use protobuf::Message as PbMessage;
 use raft::{Error as RaftError, Storage, StorageError};
 use raft::{GetEntriesContext, prelude::*};
-use rocksdb::{DB, Options};
+use rocksdb::{DB, Options, WriteBatch, WriteBatchWithTransaction};
 use std::path::Path;
 
 const KEY_HARD_STATE: &[u8] = b"hard_state";
@@ -138,14 +138,15 @@ impl RocksDBStorage {
         hs.set_commit(compact_index - 1);
         hs.set_term(snap_term);
         self.set_hard_state(hs)?;
-
         let mut opts = rocksdb::WriteOptions::default();
         opts.set_sync(true);
+        let mut batch = WriteBatchWithTransaction::default();
         for idx in first_index..compact_index {
-            self.db
-                .delete_opt(entry_key(idx), &opts)
-                .map_err(|e| RaftError::Store(StorageError::Other(Box::new(e))))?;
+            batch.delete(entry_key(idx))
         }
+        self.db
+            .write_opt(batch, &opts)
+            .map_err(|e| RaftError::Store(StorageError::Other(Box::new(e))))?;
 
         Ok(())
     }

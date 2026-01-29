@@ -255,9 +255,9 @@ impl<V: ProtocolVersion + Send + 'static> SigningHandler<V> {
                     )));
                 }
 
-                let is_same_hrs =
-                    current_state.height == vote.height && current_state.round == vote.round
-                        && current_state.step == step;
+                let is_same_hrs = current_state.height == vote.height
+                    && current_state.round == vote.round
+                    && current_state.step == step;
 
                 if is_same_hrs && !current_state.sign_data.is_empty() {
                     let ext_matches = ext_sign_data
@@ -375,20 +375,6 @@ impl<V: ProtocolVersion + Send + 'static> SigningHandler<V> {
                         resend_signature: false,
                         should_sign: true,
                     } => {
-                        if !current_state.signature.is_empty()
-                            && !current_state.sign_data.is_empty()
-                        {
-                            raft_node.cache_signature(
-                                current_state.height,
-                                current_state.round,
-                                current_state.step,
-                                current_state.sign_data.clone(),
-                                current_state.signature.clone(),
-                                current_state.ext_sign_data.clone(),
-                                current_state.ext_signature.clone(),
-                            );
-                        }
-
                         let signature = signer.sign_bytes(&sign_data)?;
                         let ext_signature = match ext_sign_data.as_ref() {
                             Some(bytes) => Some(signer.sign_bytes(bytes)?),
@@ -405,7 +391,10 @@ impl<V: ProtocolVersion + Send + 'static> SigningHandler<V> {
                         };
 
                         if let Err(e) = raft_node.replicate_state(new_state) {
-                            error!("CRITICAL: State replication failed: {}. Not signing.", e);
+                            error!(
+                                "CRITICAL: State replication failed: {}. Not sending a sign response.",
+                                e
+                            );
                             return Ok(Response::SignedVote(V::create_vote_response(
                                 None,
                                 Vec::new(),
@@ -561,11 +550,9 @@ mod tests {
         >,
     ) -> Vec<u8> {
         match resp {
-            Response::SignedProposal(resp) => resp
-                .proposal
-                .expect("expected proposal")
-                .signature
-                .to_vec(),
+            Response::SignedProposal(resp) => {
+                resp.proposal.expect("expected proposal").signature.to_vec()
+            }
             other => panic!("unexpected response: {:?}", other),
         }
     }
