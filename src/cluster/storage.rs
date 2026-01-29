@@ -67,6 +67,22 @@ impl RocksDBStorage {
         Ok(())
     }
 
+    pub fn get_entry(&self, index: u64) -> raft::Result<Option<Entry>> {
+        let key = entry_key(index);
+        match self
+            .db
+            .get(key)
+            .map_err(|e| RaftError::Store(StorageError::Other(Box::new(e))))?
+        {
+            Some(bytes) => {
+                let entry = Entry::parse_from_bytes(&bytes)
+                    .map_err(|e| RaftError::Store(StorageError::Other(Box::new(e))))?;
+                Ok(Some(entry))
+            }
+            None => Ok(None),
+        }
+    }
+
     pub fn set_hard_state(&mut self, hs: HardState) -> raft::Result<()> {
         let mut opts = rocksdb::WriteOptions::default();
         opts.set_sync(true);

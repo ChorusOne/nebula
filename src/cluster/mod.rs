@@ -38,6 +38,7 @@ pub struct SignerRaftNode {
 }
 
 const RECENT_SIGNATURES_LIMIT: usize = 100;
+const COMPACTION_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 #[derive(Clone, Debug)]
 struct CachedSignature {
@@ -72,7 +73,7 @@ impl SignerRaftNode {
         let logger = stdlog_to_slog();
         let storage = create_storage(&config);
         let signer_state = Arc::new(RwLock::new(storage.read_signer_state().unwrap()));
-        let recent_signatures = Arc::new(Mutex::new(VecDeque::new()));
+        let recent_signatures = Arc::new(Mutex::new(load_recent_signatures(&storage)));
 
         let (in_tx, in_rx) = mpsc::channel::<RaftMessage>();
         let (out_tx, out_rx) = mpsc::channel::<RaftProtoMessage>();
@@ -89,6 +90,7 @@ impl SignerRaftNode {
             out_tx,
             Arc::clone(&signer_state),
             Arc::clone(&raft_state),
+            Arc::clone(&recent_signatures),
         );
 
         Arc::new(SignerRaftNode {
@@ -116,25 +118,18 @@ impl SignerRaftNode {
         }
 
         let mut cache = self.recent_signatures.lock().unwrap();
-        cache.retain(|entry| {
-            !(entry.height == height
-                && entry.round == round
-                && entry.step == step
-                && entry.sign_data == sign_data
-                && entry.ext_sign_data == ext_sign_data)
-        });
-        cache.push_front(CachedSignature {
-            height,
-            round,
-            step,
-            sign_data,
-            signature,
-            ext_sign_data,
-            ext_signature,
-        });
-        while cache.len() > RECENT_SIGNATURES_LIMIT {
-            cache.pop_back();
-        }
+        cache_signature_entry(
+            &mut cache,
+            CachedSignature {
+                height,
+                round,
+                step,
+                sign_data,
+                signature,
+                ext_sign_data,
+                ext_signature,
+            },
+        );
     }
 
     pub fn find_cached_signature(
@@ -229,6 +224,67 @@ impl SignerRaftNode {
     }
 }
 
+fn cache_signature_entry(cache: &mut VecDeque<CachedSignature>, entry: CachedSignature) {
+    cache.retain(|existing| {
+        !(existing.height == entry.height
+            && existing.round == entry.round
+            && existing.step == entry.step
+            && existing.sign_data == entry.sign_data
+            && existing.ext_sign_data == entry.ext_sign_data)
+    });
+    cache.push_front(entry);
+    while cache.len() > RECENT_SIGNATURES_LIMIT {
+        cache.pop_back();
+    }
+}
+
+fn load_recent_signatures(storage: &RocksDBStorage) -> VecDeque<CachedSignature> {
+    let mut cache = VecDeque::new();
+    let last_index = match storage.last_index() {
+        Ok(last_index) => last_index,
+        Err(_) => return cache,
+    };
+    let first_index = match storage.first_index() {
+        Ok(first_index) => first_index,
+        Err(_) => return cache,
+    };
+    if last_index < first_index {
+        return cache;
+    }
+
+    for idx in (first_index..=last_index).rev() {
+        if cache.len() >= RECENT_SIGNATURES_LIMIT {
+            break;
+        }
+        let entry = match storage.get_entry(idx) {
+            Ok(entry) => entry,
+            Err(_) => continue,
+        };
+        let Some(entry) = entry else {
+            continue;
+        };
+        if entry.get_entry_type() != EntryType::EntryNormal || entry.get_data().is_empty() {
+            continue;
+        }
+        let Some(state) = ConsensusData::from_bytes(entry.get_data()) else {
+            continue;
+        };
+        if state.sign_data.is_empty() || state.signature.is_empty() {
+            continue;
+        }
+        cache.push_back(CachedSignature {
+            height: state.height,
+            round: state.round,
+            step: state.step,
+            sign_data: state.sign_data,
+            signature: state.signature,
+            ext_sign_data: state.ext_sign_data,
+            ext_signature: state.ext_signature,
+        });
+    }
+    cache
+}
+
 fn stdlog_to_slog() -> slog::Logger {
     let drain = slog_stdlog::StdLog.fuse();
     let drain = slog_async::Async::new(drain)
@@ -251,7 +307,7 @@ fn create_storage(config: &RaftConfig) -> RocksDBStorage {
         bootstrap_storage(&mut storage, peer_ids, &config.initial_state_path);
     } else {
         info!("found existing state, loading from DB");
-        if let Err(e) = storage.compact_to_keep_last(100) {
+        if let Err(e) = storage.compact_to_keep_last(RECENT_SIGNATURES_LIMIT as u64) {
             warn!("failed to compact raft log on startup: {}", e);
         }
     }
@@ -392,6 +448,7 @@ fn start_raft_thread(
     out_tx: Sender<RaftProtoMessage>,
     signer_state: Arc<RwLock<ConsensusData>>,
     raft_state: Arc<RwLock<(StateRole, u64)>>,
+    recent_signatures: Arc<Mutex<VecDeque<CachedSignature>>>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let raft_cfg = RaftCoreConfig {
@@ -408,6 +465,7 @@ fn start_raft_thread(
         let mut last_tick = Instant::now();
         let mut timeout = Duration::from_millis(100);
         let mut proposal_callbacks: VecDeque<Sender<Result<(), SignerError>>> = VecDeque::new();
+        let mut last_compaction = Instant::now();
 
         loop {
             match in_rx.recv_timeout(timeout) {
@@ -447,7 +505,15 @@ fn start_raft_thread(
                 &out_tx,
                 &raft_state,
                 &mut proposal_callbacks,
+                &recent_signatures,
             );
+
+            if last_compaction.elapsed() >= COMPACTION_INTERVAL {
+                if let Err(e) = raft_node.mut_store().compact_to_keep_last(RECENT_SIGNATURES_LIMIT as u64) {
+                    warn!("failed to compact raft log on interval: {}", e);
+                }
+                last_compaction = Instant::now();
+            }
         }
     })
 }
@@ -458,6 +524,7 @@ fn on_ready(
     net_tx: &Sender<RaftProtoMessage>,
     raft_state: &Arc<RwLock<(StateRole, u64)>>,
     proposal_callbacks: &mut VecDeque<Sender<Result<(), SignerError>>>,
+    recent_signatures: &Arc<Mutex<VecDeque<CachedSignature>>>,
 ) {
     if !raft_group.has_ready() {
         return;
@@ -521,6 +588,7 @@ fn on_ready(
             ready.take_committed_entries(),
             signer_state,
             proposal_callbacks,
+            recent_signatures,
         );
     }
 
@@ -536,6 +604,7 @@ fn on_ready(
             light_rd.take_committed_entries(),
             signer_state,
             proposal_callbacks,
+            recent_signatures,
         );
     }
 
@@ -547,6 +616,7 @@ fn handle_committed_entries(
     committed_entries: Vec<raft_proto::eraftpb::Entry>,
     signer_state: &Arc<RwLock<ConsensusData>>,
     proposal_callbacks: &mut VecDeque<Sender<Result<(), SignerError>>>,
+    recent_signatures: &Arc<Mutex<VecDeque<CachedSignature>>>,
 ) {
     for ent in committed_entries {
         match ent.get_entry_type() {
@@ -561,6 +631,21 @@ fn handle_committed_entries(
                         );
                         *signer_state.write().unwrap() = ns.clone();
                         raft_group.mut_store().write_signer_state(&ns).unwrap();
+                        if !ns.sign_data.is_empty() && !ns.signature.is_empty() {
+                            let mut cache = recent_signatures.lock().unwrap();
+                            cache_signature_entry(
+                                &mut cache,
+                                CachedSignature {
+                                    height: ns.height,
+                                    round: ns.round,
+                                    step: ns.step,
+                                    sign_data: ns.sign_data.clone(),
+                                    signature: ns.signature.clone(),
+                                    ext_sign_data: ns.ext_sign_data.clone(),
+                                    ext_signature: ns.ext_signature.clone(),
+                                },
+                            );
+                        }
 
                         if let Some(callback) = proposal_callbacks.pop_front() {
                             if let Err(e) = callback.send(Ok(())) {
