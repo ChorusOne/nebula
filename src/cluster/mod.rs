@@ -27,7 +27,7 @@ enum RaftMessage {
     Shutdown,
 }
 pub enum RaftEvent {
-    LeadershipChanged,
+    LeadershipChanged(u64, u64),
 }
 
 pub struct SignerRaftNode {
@@ -379,7 +379,7 @@ fn on_ready(
     raft_state: &Arc<RwLock<(StateRole, u64)>>,
     proposal_callbacks: &mut VecDeque<Sender<Result<(), SignerError>>>,
 ) -> Vec<RaftEvent> {
-    let events: Vec<RaftEvent> = vec![];
+    let mut events: Vec<RaftEvent> = vec![];
     if !raft_group.has_ready() {
         return events;
     }
@@ -387,8 +387,14 @@ fn on_ready(
     let mut ready = raft_group.ready();
 
     if let Some(ss) = ready.ss() {
+        info!("got some more soft state");
         let was_leader = raft_state.read().unwrap().0 == StateRole::Leader;
         let is_leader = ss.raft_state == StateRole::Leader;
+        if ss.leader_id != raft_state.read().unwrap().1 {
+            let from = raft_state.read().unwrap().1;
+            let to = ss.leader_id;
+            events.push(RaftEvent::LeadershipChanged(from, to));
+        }
 
         if was_leader && !is_leader {
             warn!(

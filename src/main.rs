@@ -114,10 +114,10 @@ fn start_signer(config: Config) -> Result<(), SignerError> {
     let pub_key = signing_backend.public_key()?;
     info!("Public key: {}", pub_key);
 
+    let (tx, rx) = mpsc::channel::<RaftEvent>();
     let state_persist: Arc<Mutex<PersistVariants>> = match &config.persist {
         PersistConfig::Raft { raft } => {
             info!("Node ID: {}", raft.node_id);
-            let (tx, rx) = mpsc::channel::<RaftEvent>();
             Arc::new(Mutex::new(PersistVariants::Raft(SignerRaftNode::new(
                 raft.clone(),
                 tx.clone(),
@@ -130,6 +130,17 @@ fn start_signer(config: Config) -> Result<(), SignerError> {
             )))
         }
     };
+
+    loop {
+        match rx.recv() {
+            Ok(ev) => match ev {
+                RaftEvent::LeadershipChanged(from, to) => {
+                    info!("Hi. Leadership changed from: {}, to: {}", from, to)
+                }
+            },
+            Err(_) => todo!(),
+        }
+    }
 
     loop {
         // TODO: don't connect if we are not the master; it will block the master from connecting
