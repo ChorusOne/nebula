@@ -25,6 +25,7 @@ use signer::Signer;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::str::FromStr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
@@ -115,9 +116,11 @@ fn start_signer(config: Config) -> Result<(), SignerError> {
     info!("Public key: {}", pub_key);
 
     let (tx, rx) = mpsc::channel::<RaftEvent>();
+    let mut raft_node_id: Option<u64> = None;
     let state_persist: Arc<Mutex<PersistVariants>> = match &config.persist {
         PersistConfig::Raft { raft } => {
             info!("Node ID: {}", raft.node_id);
+            raft_node_id = Some(raft.node_id);
             Arc::new(Mutex::new(PersistVariants::Raft(SignerRaftNode::new(
                 raft.clone(),
                 tx.clone(),
@@ -131,25 +134,61 @@ fn start_signer(config: Config) -> Result<(), SignerError> {
         }
     };
 
-    loop {
-        match rx.recv() {
-            Ok(ev) => match ev {
-                RaftEvent::LeadershipChanged(from, to) => {
-                    info!("Hi. Leadership changed from: {}, to: {}", from, to)
+    if let Some(node_id) = raft_node_id {
+        let mut leader_loop: Option<LeaderLoopHandle> = None;
+
+        if let Ok(guard) = state_persist.lock() {
+            if let PersistVariants::Raft(node) = &*guard {
+                if node.is_leader() {
+                    leader_loop = Some(start_leader_loop(
+                        config.clone(),
+                        Arc::clone(&state_persist),
+                    ));
                 }
-            },
-            Err(_) => todo!(),
+            }
         }
+
+        loop {
+            match rx.recv() {
+                Ok(RaftEvent::LeadershipChanged(from, to)) => {
+                    info!("Leadership changed from: {}, to: {}", from, to);
+                    if to == node_id {
+                        if leader_loop.is_none() {
+                            leader_loop = Some(start_leader_loop(
+                                config.clone(),
+                                Arc::clone(&state_persist),
+                            ));
+                        }
+                    } else if leader_loop.is_some() {
+                        stop_leader_loop(&mut leader_loop);
+                    }
+                }
+                Err(_) => {
+                    warn!("Raft event channel closed; shutting down leader loop");
+                    stop_leader_loop(&mut leader_loop);
+                    break;
+                }
+            }
+        }
+
+        return Ok(());
     }
 
     loop {
-        // TODO: don't connect if we are not the master; it will block the master from connecting
-        // and we need to close the connection on leadership loss
+        let stop = Arc::new(AtomicBool::new(false));
         let result = match config.version {
-            ProtocolVersionConfig::V0_34 => run_leader::<VersionV0_34>(&config, &state_persist),
-            ProtocolVersionConfig::V0_37 => run_leader::<VersionV0_37>(&config, &state_persist),
-            ProtocolVersionConfig::V0_38 => run_leader::<VersionV0_38>(&config, &state_persist),
-            ProtocolVersionConfig::V1_0 => run_leader::<VersionV1_0>(&config, &state_persist),
+            ProtocolVersionConfig::V0_34 => {
+                run_leader::<VersionV0_34>(&config, &state_persist, &stop)
+            }
+            ProtocolVersionConfig::V0_37 => {
+                run_leader::<VersionV0_37>(&config, &state_persist, &stop)
+            }
+            ProtocolVersionConfig::V0_38 => {
+                run_leader::<VersionV0_38>(&config, &state_persist, &stop)
+            }
+            ProtocolVersionConfig::V1_0 => {
+                run_leader::<VersionV1_0>(&config, &state_persist, &stop)
+            }
         };
 
         match result {
@@ -159,9 +198,52 @@ fn start_signer(config: Config) -> Result<(), SignerError> {
     }
 }
 
+struct LeaderLoopHandle {
+    stop: Arc<AtomicBool>,
+    join: thread::JoinHandle<()>,
+}
+
+fn start_leader_loop(config: Config, persist: Arc<Mutex<PersistVariants>>) -> LeaderLoopHandle {
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_for_thread = Arc::clone(&stop);
+    let join = thread::spawn(move || {
+        let result = match config.version {
+            ProtocolVersionConfig::V0_34 => {
+                run_leader::<VersionV0_34>(&config, &persist, &stop_for_thread)
+            }
+            ProtocolVersionConfig::V0_37 => {
+                run_leader::<VersionV0_37>(&config, &persist, &stop_for_thread)
+            }
+            ProtocolVersionConfig::V0_38 => {
+                run_leader::<VersionV0_38>(&config, &persist, &stop_for_thread)
+            }
+            ProtocolVersionConfig::V1_0 => {
+                run_leader::<VersionV1_0>(&config, &persist, &stop_for_thread)
+            }
+        };
+
+        match result {
+            Ok(()) => warn!("Leader loop exited normally"),
+            Err(e) => error!("Leader loop error: {}", e),
+        }
+    });
+
+    LeaderLoopHandle { stop, join }
+}
+
+fn stop_leader_loop(handle: &mut Option<LeaderLoopHandle>) {
+    if let Some(handle) = handle.take() {
+        handle.stop.store(true, Ordering::SeqCst);
+        if let Err(e) = handle.join.join() {
+            warn!("Leader loop thread panicked: {:?}", e);
+        }
+    }
+}
+
 fn run_leader<V: ProtocolVersion + Send + 'static>(
     config: &Config,
     persist: &Arc<Mutex<PersistVariants>>,
+    stop: &Arc<AtomicBool>,
 ) -> Result<(), SignerError> {
     info!(
         "Running leader loop for {} connections",
@@ -178,9 +260,10 @@ fn run_leader<V: ProtocolVersion + Send + 'static>(
             let p = Arc::clone(persist);
             let host = conn.host.clone();
             let port = conn.port;
+            let stop = Arc::clone(stop);
 
             info!("connecting to {host}:{port}");
-            thread::spawn(move || handle_connection::<V>(host, port, config, p))
+            thread::spawn(move || handle_connection::<V>(host, port, config, p, stop))
         })
         .collect();
 
@@ -198,18 +281,39 @@ fn handle_connection<V: ProtocolVersion + Send + 'static>(
     port: u16,
     config: Arc<Config>,
     persist: Arc<Mutex<PersistVariants>>,
+    stop: Arc<AtomicBool>,
 ) -> Result<(), SignerError> {
     let mut retry_count = 0;
     let identity_key = ed25519_consensus::SigningKey::new(rand_core::OsRng);
 
-    let mut signer =
-        crate::signer::connect_to_cometbft_node::<V>(&host, port, &identity_key, &config)?;
+    let mut signer = crate::signer::connect_to_cometbft_node::<V>(
+        &host,
+        port,
+        &identity_key,
+        &config,
+        Some(&stop),
+    )?;
 
     loop {
+        if stop.load(Ordering::SeqCst) {
+            break;
+        }
+
         let response = handle_single_request(&mut signer, &persist);
         if let Err(ref e) = response {
+            if let SignerError::IoError(io) = e {
+                if io.kind() == std::io::ErrorKind::TimedOut
+                    || io.kind() == std::io::ErrorKind::WouldBlock
+                {
+                    if stop.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    continue;
+                }
+            }
+
             error!("Error handling request from {}:{} - {}", host, port, e);
-            match reconnect::<V>(&host, port, &identity_key, &config, &mut retry_count) {
+            match reconnect::<V>(&host, port, &identity_key, &config, &mut retry_count, &stop) {
                 Ok(new_signer) => signer = new_signer,
                 Err(_) => continue,
             }
@@ -217,6 +321,7 @@ fn handle_connection<V: ProtocolVersion + Send + 'static>(
             retry_count = 0;
         }
     }
+    Ok(())
 }
 
 enum RequestProcessingAction<V: ProtocolVersion> {
@@ -298,10 +403,17 @@ fn reconnect<V: ProtocolVersion>(
     identity_key: &ed25519_consensus::SigningKey,
     config: &Config,
     retry_count: &mut u32,
+    stop: &AtomicBool,
 ) -> Result<Signer<Box<dyn SigningBackend>, V, SecretConnection<TcpStream>>, SignerError> {
     const MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
 
     loop {
+        if stop.load(Ordering::SeqCst) {
+            return Err(SignerError::Other(
+                "Connection attempt cancelled".to_string(),
+            ));
+        }
+
         *retry_count += 1;
         let delay =
             Duration::from_millis(100 * 2_u64.pow((*retry_count).min(10))).min(MAX_RETRY_DELAY);
@@ -312,7 +424,19 @@ fn reconnect<V: ProtocolVersion>(
         );
         thread::sleep(delay);
 
-        match crate::signer::connect_to_cometbft_node::<V>(host, port, identity_key, config) {
+        if stop.load(Ordering::SeqCst) {
+            return Err(SignerError::Other(
+                "Connection attempt cancelled".to_string(),
+            ));
+        }
+
+        match crate::signer::connect_to_cometbft_node::<V>(
+            host,
+            port,
+            identity_key,
+            config,
+            Some(stop),
+        ) {
             Ok(signer) => {
                 info!("Successfully reconnected to {}:{}", host, port);
                 *retry_count = 0;

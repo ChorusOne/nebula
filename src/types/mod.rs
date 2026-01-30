@@ -1,6 +1,5 @@
 use crate::{SignerError, protocol::ValidRequest};
 use serde::{Deserialize, Serialize};
-use slog::Key;
 use thiserror::Error;
 
 #[derive(Debug, Clone)]

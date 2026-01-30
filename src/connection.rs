@@ -2,6 +2,7 @@ use crate::error::SignerError;
 use ed25519_consensus::SigningKey;
 use log::{error, info};
 use std::net::TcpStream;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::sleep;
 use std::time::Duration;
 use tendermint_p2p::secret_connection::{self, SecretConnection};
@@ -11,8 +12,13 @@ pub fn open_secret_connection(
     port: u16,
     identity_key: SigningKey,
     protocol_version: secret_connection::Version,
+    stop: Option<&AtomicBool>,
 ) -> Result<SecretConnection<TcpStream>, SignerError> {
     loop {
+        if stop.map(|flag| flag.load(Ordering::SeqCst)).unwrap_or(false) {
+            return Err(SignerError::Other("Connection attempt cancelled".to_string()));
+        }
+
         let socket = match TcpStream::connect(format!("{host}:{port}")) {
             Ok(s) => s,
             Err(e) => {
@@ -24,6 +30,8 @@ pub fn open_secret_connection(
                 continue;
             }
         };
+
+        socket.set_read_timeout(Some(Duration::from_secs(1)))?;
 
         match SecretConnection::new(socket, identity_key.clone(), protocol_version) {
             Ok(conn) => {

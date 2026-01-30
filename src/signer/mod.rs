@@ -12,6 +12,7 @@ use prost::Message as _;
 use std::io::{Read, Write};
 use std::marker::PhantomData;
 use std::net::TcpStream;
+use std::sync::atomic::AtomicBool;
 use tendermint_p2p::secret_connection::SecretConnection;
 
 pub struct Signer<T: SigningBackend, V: ProtocolVersion, C: Read + Write> {
@@ -149,6 +150,7 @@ pub fn connect_to_cometbft_node<V: ProtocolVersion>(
     port: u16,
     identity_key: &ed25519_consensus::SigningKey,
     config: &Config,
+    stop: Option<&AtomicBool>,
 ) -> Result<Signer<Box<dyn SigningBackend>, V, SecretConnection<TcpStream>>, SignerError> {
     info!("Connecting to CometBFT at {}:{}", host, port);
     let signing_backend = crate::backend::create_backend(&config)?;
@@ -158,6 +160,7 @@ pub fn connect_to_cometbft_node<V: ProtocolVersion>(
         port,
         identity_key.clone(),
         tendermint_p2p::secret_connection::Version::V0_34,
+        stop,
     )?;
 
     Ok(Signer::new(signing_backend, conn, config.chain_id.clone()))
