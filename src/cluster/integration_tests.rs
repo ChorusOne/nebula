@@ -226,7 +226,7 @@ fn happy_path_signing_on_stable_cluster() {
         let state = node.signer_state.read().unwrap();
         assert_eq!(state.height, 100);
         assert_eq!(state.round, 0);
-        assert_eq!(state.step, SignedMsgType::Proposal as u8);
+        assert_eq!(state.step, SignedMsgType::Proposal);
     }
 }
 

@@ -153,8 +153,7 @@ impl ProtocolVersion for VersionV0_38 {
         last_sign_bytes: &[u8],
         new_sign_bytes: &[u8],
     ) -> Result<bool, SignerError> {
-        let mut last =
-            v0_38::types::CanonicalProposal::decode_length_delimited(last_sign_bytes)?;
+        let mut last = v0_38::types::CanonicalProposal::decode_length_delimited(last_sign_bytes)?;
         let mut new = v0_38::types::CanonicalProposal::decode_length_delimited(new_sign_bytes)?;
         new.timestamp = last.timestamp.clone();
         Ok(new == last)

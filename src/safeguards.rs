@@ -19,7 +19,7 @@ pub fn should_sign_proposal(state: &ConsensusData, proposal: &Proposal) -> bool 
 
     info!(
         "checking if proposal should be signed, state: {}, proposal: {}/{}/{}",
-        state, proposal.height, proposal.round, proposal.step as u8
+        state, proposal.height, proposal.round, proposal.step
     );
     match (
         proposal.height.cmp(&state.height),
@@ -56,7 +56,7 @@ pub struct VoteCheckResult {
 pub fn should_sign_vote(state: &ConsensusData, vote: &Vote) -> VoteCheckResult {
     info!(
         "checking if vote should be signed, state: {}, vote: {}/{}/{}",
-        state, vote.height, vote.round, vote.step as u8
+        state, vote.height, vote.round, vote.step
     );
     let vote_step = vote.step;
     match (
@@ -95,12 +95,10 @@ pub fn should_sign_vote(state: &ConsensusData, vote: &Vote) -> VoteCheckResult {
         }
 
         // Same H/R/S => reuse signature
-        (Ordering::Equal, Ordering::Equal, _, _) if state.step == vote_step as u8 => {
-            VoteCheckResult {
-                should_sign: false,
-                resend_signature: true,
-            }
-        }
+        (Ordering::Equal, Ordering::Equal, _, _) if state.step == vote_step => VoteCheckResult {
+            should_sign: false,
+            resend_signature: true,
+        },
         // everything else: don't sign
         _ => VoteCheckResult {
             should_sign: false,
@@ -143,7 +141,7 @@ fn should_sign_proposal_logic() {
     let mut state = ConsensusData {
         height: 10,
         round: 1,
-        step: SignedMsgType::Proposal as u8,
+        step: SignedMsgType::Proposal,
         sign_data: Vec::new(),
         signature: Vec::new(),
         ext_sign_data: Vec::new(),
@@ -189,7 +187,7 @@ fn should_sign_proposal_logic() {
     };
     assert!(!should_sign_proposal(&state, &p5));
 
-    state.step = SignedMsgType::Prevote as u8;
+    state.step = SignedMsgType::Prevote;
     assert!(!should_sign_proposal(&state, &p3));
 }
 
@@ -198,7 +196,7 @@ fn should_sign_vote_logic() {
     let state = ConsensusData {
         height: 10,
         round: 1,
-        step: SignedMsgType::Proposal as u8,
+        step: SignedMsgType::Proposal,
         sign_data: Vec::new(),
         signature: Vec::new(),
         ext_sign_data: Vec::new(),
@@ -253,7 +251,7 @@ fn should_sign_vote_logic() {
     let state_after_prevote = ConsensusData {
         height: 10,
         round: 1,
-        step: SignedMsgType::Prevote as u8,
+        step: SignedMsgType::Prevote,
         sign_data: Vec::new(),
         signature: Vec::new(),
         ext_sign_data: Vec::new(),
@@ -265,7 +263,7 @@ fn should_sign_vote_logic() {
     let state_after_precommit = ConsensusData {
         height: 10,
         round: 1,
-        step: SignedMsgType::Precommit as u8,
+        step: SignedMsgType::Precommit,
         sign_data: Vec::new(),
         signature: Vec::new(),
         ext_sign_data: Vec::new(),

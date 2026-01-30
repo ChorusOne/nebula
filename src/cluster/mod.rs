@@ -3,7 +3,7 @@ mod storage;
 use crate::cluster::storage::RocksDBStorage;
 use crate::config::RaftConfig;
 use crate::error::SignerError;
-use crate::types::ConsensusData;
+use crate::types::{ConsensusData, SignedMsgType};
 use log::{info, warn};
 use protobuf::Message as ProtobufMessage;
 use raft::prelude::{ConfState, EntryType, Message as RaftProtoMessage, Snapshot};
@@ -44,7 +44,7 @@ const COMPACTION_INTERVAL: Duration = Duration::from_secs(60 * 60);
 struct CachedSignature {
     height: i64,
     round: i64,
-    step: u8,
+    step: SignedMsgType,
     sign_data: Vec<u8>,
     signature: Vec<u8>,
     ext_sign_data: Vec<u8>,
@@ -107,7 +107,7 @@ impl SignerRaftNode {
         &self,
         height: i64,
         round: i64,
-        step: u8,
+        step: SignedMsgType,
         sign_data: Vec<u8>,
         signature: Vec<u8>,
         ext_sign_data: Vec<u8>,
@@ -136,7 +136,7 @@ impl SignerRaftNode {
         &self,
         height: i64,
         round: i64,
-        step: u8,
+        step: SignedMsgType,
         sign_data: &[u8],
         ext_sign_data: &[u8],
     ) -> Option<(Vec<u8>, Vec<u8>)> {
@@ -509,7 +509,10 @@ fn start_raft_thread(
             );
 
             if last_compaction.elapsed() >= COMPACTION_INTERVAL {
-                if let Err(e) = raft_node.mut_store().compact_to_keep_last(RECENT_SIGNATURES_LIMIT as u64) {
+                if let Err(e) = raft_node
+                    .mut_store()
+                    .compact_to_keep_last(RECENT_SIGNATURES_LIMIT as u64)
+                {
                     warn!("failed to compact raft log on interval: {}", e);
                 }
                 last_compaction = Instant::now();

@@ -35,6 +35,7 @@ impl<V: ProtocolVersion + Send + 'static> SigningHandler<V> {
     > {
         match request {
             Request::SignProposal(proposal) => {
+                info!("starting processing of proposal request");
                 let start = std::time::Instant::now();
                 debug!("waiting for lock");
                 // This is to make sure that we only serve a request from one CometBFT node at a time.
@@ -61,12 +62,11 @@ impl<V: ProtocolVersion + Send + 'static> SigningHandler<V> {
 
                 let sign_data = signer.proposal_sign_bytes(&proposal)?;
                 let current_state = raft_node.signer_state.read().unwrap().clone();
-                let step = SignedMsgType::Proposal as u8;
 
                 if let Some((signature, _)) = raft_node.find_cached_signature(
                     proposal.height,
                     proposal.round,
-                    step,
+                    proposal.step,
                     &sign_data,
                     &[],
                 ) {
@@ -83,7 +83,7 @@ impl<V: ProtocolVersion + Send + 'static> SigningHandler<V> {
 
                 let is_same_hrs = current_state.height == proposal.height
                     && current_state.round == proposal.round
-                    && current_state.step == step;
+                    && current_state.step == proposal.step;
 
                 if is_same_hrs && !current_state.sign_data.is_empty() {
                     if current_state.sign_data == sign_data && !current_state.signature.is_empty() {
@@ -119,7 +119,7 @@ impl<V: ProtocolVersion + Send + 'static> SigningHandler<V> {
                         let new_state = ConsensusData {
                             height: proposal.height,
                             round: proposal.round,
-                            step,
+                            step: proposal.step,
                             sign_data,
                             signature: signature.clone(),
                             ext_sign_data: Vec::new(),
@@ -142,6 +142,11 @@ impl<V: ProtocolVersion + Send + 'static> SigningHandler<V> {
                         )));
                     }
 
+                    log::info!(
+                        "only ts: {only_ts}, got asked to sign: {}, signed before: {}",
+                        hex::encode(sign_data),
+                        hex::encode(current_state.sign_data)
+                    );
                     return Ok(Response::SignedProposal(V::create_proposal_response(
                         None,
                         Vec::new(),
@@ -169,7 +174,7 @@ impl<V: ProtocolVersion + Send + 'static> SigningHandler<V> {
                     let new_state = ConsensusData {
                         height: proposal.height,
                         round: proposal.round,
-                        step,
+                        step: proposal.step,
                         sign_data,
                         signature: signature.clone(),
                         ext_sign_data: Vec::new(),
@@ -204,6 +209,7 @@ impl<V: ProtocolVersion + Send + 'static> SigningHandler<V> {
             }
 
             Request::SignVote(vote) => {
+                info!("starting processing of vote request");
                 let start = std::time::Instant::now();
                 debug!("waiting for lock");
                 let _guard = signing_lock.lock().unwrap();
@@ -229,12 +235,11 @@ impl<V: ProtocolVersion + Send + 'static> SigningHandler<V> {
                 let ext_sign_data_bytes = ext_sign_data.as_deref().unwrap_or(&[]);
 
                 let current_state = raft_node.signer_state.read().unwrap().clone();
-                let step: u8 = vote.step.into();
 
                 if let Some((signature, ext_signature)) = raft_node.find_cached_signature(
                     vote.height,
                     vote.round,
-                    step,
+                    vote.step,
                     &sign_data,
                     ext_sign_data_bytes,
                 ) {
@@ -257,7 +262,7 @@ impl<V: ProtocolVersion + Send + 'static> SigningHandler<V> {
 
                 let is_same_hrs = current_state.height == vote.height
                     && current_state.round == vote.round
-                    && current_state.step == step;
+                    && current_state.step == vote.step;
 
                 if is_same_hrs && !current_state.sign_data.is_empty() {
                     let ext_matches = ext_sign_data
@@ -334,23 +339,16 @@ impl<V: ProtocolVersion + Send + 'static> SigningHandler<V> {
                         let new_state = ConsensusData {
                             height: vote.height,
                             round: vote.round,
-                            step,
+                            step: vote.step,
                             sign_data,
                             signature: signature.clone(),
                             ext_sign_data: ext_sign_data.clone().unwrap_or_default(),
                             ext_signature: ext_signature.clone().unwrap_or_default(),
                         };
+                        // assert_eq!(new_state, current_state);
 
-                        if let Err(e) = raft_node.replicate_state(new_state) {
-                            error!("CRITICAL: State replication failed: {}. Not signing.", e);
-                            return Ok(Response::SignedVote(V::create_vote_response(
-                                None,
-                                Vec::new(),
-                                None,
-                                Some(format!("Raft replication failed: {}", e)),
-                            )));
-                        }
-
+                        log::info!("this signature is replayed, no need to persist it again");
+                        // log::info!("old signbytes: {}, new signbytes: {}", si);
                         return Ok(Response::SignedVote(V::create_vote_response(
                             Some(vote),
                             signature,
@@ -383,7 +381,7 @@ impl<V: ProtocolVersion + Send + 'static> SigningHandler<V> {
                         let new_state = ConsensusData {
                             height: vote.height,
                             round: vote.round,
-                            step,
+                            step: vote.step,
                             sign_data,
                             signature: signature.clone(),
                             ext_sign_data: ext_sign_data.clone().unwrap_or_default(),

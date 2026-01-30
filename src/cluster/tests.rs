@@ -66,7 +66,7 @@ fn single_node_cluster() {
     let new_state = ConsensusData {
         height: 100,
         round: 1,
-        step: SignedMsgType::Proposal as u8,
+        step: SignedMsgType::Proposal,
         sign_data: Vec::new(),
         signature: Vec::new(),
         ext_sign_data: Vec::new(),
@@ -111,7 +111,7 @@ fn three_node_cluster_basic() {
     let new_state = ConsensusData {
         height: 200,
         round: 2,
-        step: SignedMsgType::Prevote as u8,
+        step: SignedMsgType::Prevote,
         sign_data: Vec::new(),
         signature: Vec::new(),
         ext_sign_data: Vec::new(),

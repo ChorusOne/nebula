@@ -58,6 +58,18 @@ pub enum SignedMsgType {
     Proposal = 32,
 }
 
+impl std::fmt::Display for SignedMsgType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let step_str = match self {
+            SignedMsgType::Unknown => "unknown (0)",
+            SignedMsgType::Prevote => "prevote (1)",
+            SignedMsgType::Precommit => "precommit (2)",
+            SignedMsgType::Proposal => "proposal (32)",
+        };
+        write!(f, "SignedMsgType: {}", step_str)
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Vote {
     pub step: SignedMsgType,
@@ -106,18 +118,6 @@ impl From<SignedMsgType> for i32 {
             SignedMsgType::Prevote => 1,
             SignedMsgType::Precommit => 2,
             SignedMsgType::Proposal => 32,
-        }
-    }
-}
-
-// this is getting messy, probably something wrong with the types somewhere?
-impl From<u8> for SignedMsgType {
-    fn from(n: u8) -> Self {
-        match n {
-            1 => SignedMsgType::Prevote,
-            2 => SignedMsgType::Precommit,
-            32 => SignedMsgType::Proposal,
-            _ => SignedMsgType::Unknown,
         }
     }
 }
@@ -174,7 +174,7 @@ impl From<KeyType> for String {
 pub struct ConsensusData {
     pub height: i64,
     pub round: i64,
-    pub step: u8,
+    pub step: SignedMsgType,
     pub sign_data: Vec<u8>,
     pub signature: Vec<u8>,
     pub ext_sign_data: Vec<u8>,
