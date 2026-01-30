@@ -144,13 +144,14 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
     }
 }
 
-pub fn create_signer<V: ProtocolVersion>(
+pub fn connect_to_cometbft_node<V: ProtocolVersion>(
     host: &str,
     port: u16,
     identity_key: &ed25519_consensus::SigningKey,
     config: &Config,
 ) -> Result<Signer<Box<dyn SigningBackend>, V, SecretConnection<TcpStream>>, SignerError> {
     info!("Connecting to CometBFT at {}:{}", host, port);
+    let signing_backend = crate::backend::create_backend(&config)?;
 
     let conn = open_secret_connection(
         host,
@@ -159,9 +160,7 @@ pub fn create_signer<V: ProtocolVersion>(
         tendermint_p2p::secret_connection::Version::V0_34,
     )?;
 
-    let backend = crate::backend::create_backend(config)?;
-
-    Ok(Signer::new(backend, conn, config.chain_id.clone()))
+    Ok(Signer::new(signing_backend, conn, config.chain_id.clone()))
 }
 
 #[cfg(test)]

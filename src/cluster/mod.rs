@@ -26,6 +26,9 @@ enum RaftMessage {
     #[allow(dead_code)]
     Shutdown,
 }
+pub enum RaftEvent {
+    LeadershipChanged,
+}
 
 pub struct SignerRaftNode {
     node_id: u64,
@@ -54,7 +57,7 @@ impl SignerRaftNode {
         Ok(())
     }
 
-    pub fn new(config: RaftConfig) -> Self {
+    pub fn new(config: RaftConfig, events_tx: mpsc::Sender<RaftEvent>) -> Self {
         let logger = stdlog_to_slog();
         let storage = create_storage(&config);
         let signer_state = Arc::new(RwLock::new(storage.read_signer_state().unwrap()));
@@ -72,6 +75,7 @@ impl SignerRaftNode {
             logger,
             in_rx,
             out_tx,
+            events_tx.clone(),
             Arc::clone(&signer_state),
             Arc::clone(&raft_state),
         );
@@ -302,6 +306,7 @@ fn start_raft_thread(
     logger: slog::Logger,
     in_rx: mpsc::Receiver<RaftMessage>,
     out_tx: Sender<RaftProtoMessage>,
+    events_tx: Sender<RaftEvent>,
     signer_state: Arc<RwLock<ConsensusData>>,
     raft_state: Arc<RwLock<(StateRole, u64)>>,
 ) -> thread::JoinHandle<()> {
@@ -353,13 +358,16 @@ fn start_raft_thread(
             } else {
                 timeout -= elapsed;
             }
-            on_ready(
+            let ev = on_ready(
                 &mut raft_node,
                 &signer_state,
                 &out_tx,
                 &raft_state,
                 &mut proposal_callbacks,
             );
+            for e in ev {
+                events_tx.send(e).unwrap();
+            }
         }
     })
 }
@@ -370,9 +378,10 @@ fn on_ready(
     net_tx: &Sender<RaftProtoMessage>,
     raft_state: &Arc<RwLock<(StateRole, u64)>>,
     proposal_callbacks: &mut VecDeque<Sender<Result<(), SignerError>>>,
-) {
+) -> Vec<RaftEvent> {
+    let events: Vec<RaftEvent> = vec![];
     if !raft_group.has_ready() {
-        return;
+        return events;
     }
 
     let mut ready = raft_group.ready();
@@ -452,6 +461,7 @@ fn on_ready(
     }
 
     raft_group.advance_apply();
+    events
 }
 
 fn handle_committed_entries(

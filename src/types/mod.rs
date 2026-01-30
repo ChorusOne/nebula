@@ -1,5 +1,6 @@
 use crate::{SignerError, protocol::ValidRequest};
 use serde::{Deserialize, Serialize};
+use slog::Key;
 use thiserror::Error;
 
 #[derive(Debug, Clone)]
@@ -144,6 +145,12 @@ pub enum KeyType {
     Ed25519,
     Secp256k1,
     Bls12381,
+}
+
+impl std::fmt::Display for KeyType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "KeyType({})", String::from(self.clone()))
+    }
 }
 
 impl TryFrom<&str> for KeyType {

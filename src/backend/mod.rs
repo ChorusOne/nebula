@@ -7,12 +7,13 @@ use crate::config::{Config, SigningMode};
 use crate::error::SignerError;
 use base64::{Engine as _, engine::general_purpose};
 use k256::ecdsa::signature::SignerMut;
+use std::fmt::Display;
 use std::fs;
 use std::path::Path;
 
 use crate::types::KeyType;
 
-pub trait SigningBackend: Send {
+pub trait SigningBackend: Send + Sync {
     // TODO: this is mutable because of the secp256k1 signer.
     fn sign(&mut self, data: &[u8]) -> Result<Vec<u8>, SignerError>;
 
@@ -72,6 +73,17 @@ impl SigningBackend for Ed25519Signer {
 pub struct PublicKey {
     pub bytes: Vec<u8>,
     pub key_type: KeyType,
+}
+
+impl Display for PublicKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "PublicKey (type: {}, bytes: {}",
+            self.key_type,
+            hex::encode(self.bytes.clone())
+        )
+    }
 }
 
 pub struct Secp256k1Signer {

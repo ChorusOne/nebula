@@ -12,6 +12,7 @@ mod types;
 mod versions;
 
 use crate::backend::SigningBackend;
+use crate::cluster::RaftEvent;
 use crate::error::SignerError;
 use crate::protocol::Response;
 use clap::{Parser as _, Subcommand};
@@ -24,7 +25,7 @@ use signer::Signer;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::str::FromStr;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 use tendermint_p2p::secret_connection::SecretConnection;
@@ -109,11 +110,17 @@ fn main() -> Result<(), SignerError> {
 fn start_signer(config: Config) -> Result<(), SignerError> {
     info!("Chain ID: {}", config.chain_id);
     info!("Protocol version: {:?}", config.version);
+    let signing_backend = crate::backend::create_backend(&config)?;
+    let pub_key = signing_backend.public_key()?;
+    info!("Public key: {}", pub_key);
+
     let state_persist: Arc<Mutex<PersistVariants>> = match &config.persist {
         PersistConfig::Raft { raft } => {
             info!("Node ID: {}", raft.node_id);
+            let (tx, rx) = mpsc::channel::<RaftEvent>();
             Arc::new(Mutex::new(PersistVariants::Raft(SignerRaftNode::new(
                 raft.clone(),
+                tx.clone(),
             ))))
         }
         PersistConfig::Local { local } => {
@@ -184,7 +191,8 @@ fn handle_connection<V: ProtocolVersion + Send + 'static>(
     let mut retry_count = 0;
     let identity_key = ed25519_consensus::SigningKey::new(rand_core::OsRng);
 
-    let mut signer = crate::signer::create_signer::<V>(&host, port, &identity_key, &config)?;
+    let mut signer =
+        crate::signer::connect_to_cometbft_node::<V>(&host, port, &identity_key, &config)?;
 
     loop {
         let response = handle_single_request(&mut signer, &persist);
@@ -293,7 +301,7 @@ fn reconnect<V: ProtocolVersion>(
         );
         thread::sleep(delay);
 
-        match crate::signer::create_signer::<V>(host, port, identity_key, config) {
+        match crate::signer::connect_to_cometbft_node::<V>(host, port, identity_key, config) {
             Ok(signer) => {
                 info!("Successfully reconnected to {}:{}", host, port);
                 *retry_count = 0;
