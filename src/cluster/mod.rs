@@ -7,7 +7,7 @@ use crate::types::ConsensusData;
 use log::{info, warn};
 use protobuf::Message as ProtobufMessage;
 use raft::prelude::{ConfState, EntryType, Message as RaftProtoMessage, Snapshot};
-use raft::{Config as RaftCoreConfig, RawNode, StateRole, Storage};
+use raft::{Config as RaftCoreConfig, GetEntriesContext, RawNode, StateRole, Storage};
 use slog::{Drain, o};
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufReader, BufWriter, Read, Write};
@@ -176,6 +176,27 @@ fn create_storage(config: &RaftConfig) -> RocksDBStorage {
         bootstrap_storage(&mut storage, peer_ids, &config.initial_state_path);
     } else {
         info!("found existing state, loading from DB");
+        info!(
+            "current consensus state: {}",
+            storage.read_signer_state().unwrap()
+        );
+        let first = storage.first_index().unwrap();
+        let last = storage.last_index().unwrap();
+        info!("low index: {}", first);
+        info!("high index: {}", last);
+
+        let rs = storage.initial_state().unwrap();
+        // rs.hard_state.
+        let entries = storage
+            .entries(last - 100, last, None, GetEntriesContext::empty(false))
+            .unwrap();
+        info!("entries size: {}", entries.len());
+        for entry in entries {
+            match ConsensusData::from_bytes(&entry.data.to_vec()) {
+                Some(cd) => info!("got cd: {}", cd),
+                None => info!("no cd"),
+            };
+        }
     }
 
     storage
@@ -470,6 +491,10 @@ fn handle_committed_entries(
     signer_state: &Arc<RwLock<ConsensusData>>,
     proposal_callbacks: &mut VecDeque<Sender<Result<(), SignerError>>>,
 ) {
+    info!(
+        "handling comitted entries, len: {}",
+        committed_entries.len()
+    );
     for ent in committed_entries {
         match ent.get_entry_type() {
             EntryType::EntryNormal => {

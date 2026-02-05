@@ -48,6 +48,7 @@ impl RocksDBStorage {
     }
 
     pub fn append_entries(&mut self, entries: &[Entry]) -> raft::Result<()> {
+        log::debug!("appending entries: {:?}", entries);
         let mut opts = rocksdb::WriteOptions::default();
         opts.set_sync(true);
         for entry in entries {
@@ -93,7 +94,7 @@ impl RocksDBStorage {
         let mut opts = rocksdb::WriteOptions::default();
         opts.set_sync(true);
         info!(
-            "[storage] Applying snapshot at index {}",
+            "applying snapshot at index {}",
             snapshot.get_metadata().get_index()
         );
         let meta = snapshot.get_metadata();
