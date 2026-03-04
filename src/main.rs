@@ -381,8 +381,11 @@ pub fn handle_single_request<T: SigningBackend, V: ProtocolVersion, C: Read + Wr
     let start = std::time::Instant::now();
     let request = signer.read_request()?;
 
-    info!("Received request after {:?}", start.elapsed());
-    debug!("Request: {request:?}");
+    info!(
+        "Received request after {:?}. Request: {:?}",
+        start.elapsed(),
+        request
+    );
     let start = std::time::Instant::now();
     let mut guard = persist.lock().unwrap();
     let response = match (&mut *guard, request) {
@@ -391,17 +394,31 @@ pub fn handle_single_request<T: SigningBackend, V: ProtocolVersion, C: Read + Wr
                 V::create_error_response("Not leader")
             } else {
                 let signable = V::proposal_to_bytes(&proposal, signer.chain_id())?;
+                let mut replayable = proposal.clone();
+                replayable.timestamp = None;
+                let replay_key_bytes = V::proposal_to_bytes(&replayable, signer.chain_id())?;
                 let mut request_state =
                     ConsensusData::from(&ValidRequest::Proposal(proposal.clone()));
+                request_state.request_key = sign_bytes_hash(&replay_key_bytes);
                 request_state.sign_bytes_hash = sign_bytes_hash(&signable);
 
                 match raft_node.cached_signature_lookup(&request_state) {
                     types::SignatureCacheLookup::Hit(cached) => {
+                        info!(
+                            "cache replay hit for proposal at {}/{}/{:?}",
+                            proposal.height, proposal.round, proposal.step
+                        );
                         proposal_response_from_signature::<V>(&proposal, cached.signature)
                     }
-                    types::SignatureCacheLookup::Conflict(_) => Response::SignedProposal(
-                        V::create_double_sign_prop_response(&request_state),
-                    ),
+                    types::SignatureCacheLookup::Conflict(_) => {
+                        warn!(
+                            "cache conflict for proposal at {}/{}/{:?}",
+                            proposal.height, proposal.round, proposal.step
+                        );
+                        Response::SignedProposal(V::create_double_sign_prop_response(
+                            &request_state,
+                        ))
+                    }
                     types::SignatureCacheLookup::Miss => {
                         if !raft_node.can_apply_transition(&request_state) {
                             Response::SignedProposal(V::create_double_sign_prop_response(
@@ -441,17 +458,31 @@ pub fn handle_single_request<T: SigningBackend, V: ProtocolVersion, C: Read + Wr
                 V::create_error_response("Not leader")
             } else {
                 let signable = V::vote_to_bytes(&vote, signer.chain_id())?;
+                let mut replayable = vote.clone();
+                replayable.timestamp = None;
+                let replay_key_bytes = V::vote_to_bytes(&replayable, signer.chain_id())?;
                 let mut request_state = ConsensusData::from(&ValidRequest::Vote(vote.clone()));
+                request_state.request_key = sign_bytes_hash(&replay_key_bytes);
                 request_state.sign_bytes_hash = sign_bytes_hash(&signable);
 
                 match raft_node.cached_signature_lookup(&request_state) {
-                    types::SignatureCacheLookup::Hit(cached) => vote_response_from_signature::<V>(
-                        &vote,
-                        cached.signature,
-                        (!cached.extension_signature.is_empty())
-                            .then_some(cached.extension_signature),
-                    ),
+                    types::SignatureCacheLookup::Hit(cached) => {
+                        info!(
+                            "cache replay hit for vote at {}/{}/{:?}",
+                            vote.height, vote.round, vote.step
+                        );
+                        vote_response_from_signature::<V>(
+                            &vote,
+                            cached.signature,
+                            (!cached.extension_signature.is_empty())
+                                .then_some(cached.extension_signature),
+                        )
+                    }
                     types::SignatureCacheLookup::Conflict(_) => {
+                        warn!(
+                            "cache conflict for vote at {}/{}/{:?}",
+                            vote.height, vote.round, vote.step
+                        );
                         Response::SignedVote(V::create_double_sign_vote_response(&request_state))
                     }
                     types::SignatureCacheLookup::Miss => {

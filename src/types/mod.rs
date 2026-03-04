@@ -176,6 +176,8 @@ pub struct ConsensusData {
     pub round: i64,
     pub step: SignedMsgType,
     #[serde(default)]
+    pub request_key: Vec<u8>,
+    #[serde(default)]
     pub sign_bytes_hash: Vec<u8>,
     #[serde(default)]
     pub signature: Vec<u8>,
@@ -260,7 +262,7 @@ pub enum SignatureCacheLookup {
 #[derive(Clone, Debug)]
 pub struct SignatureCache {
     capacity: usize,
-    by_hash: HashMap<Vec<u8>, ConsensusData>,
+    by_key: HashMap<Vec<u8>, ConsensusData>,
     by_slot: HashMap<SignatureSlot, Vec<u8>>,
     order: VecDeque<Vec<u8>>,
 }
@@ -275,31 +277,43 @@ impl SignatureCache {
     pub fn new(capacity: usize) -> Self {
         Self {
             capacity: capacity.max(1),
-            by_hash: HashMap::new(),
+            by_key: HashMap::new(),
             by_slot: HashMap::new(),
             order: VecDeque::new(),
         }
     }
 
+    fn key_for(record: &ConsensusData) -> Option<Vec<u8>> {
+        if !record.request_key.is_empty() {
+            Some(record.request_key.clone())
+        } else if !record.sign_bytes_hash.is_empty() {
+            Some(record.sign_bytes_hash.clone())
+        } else {
+            None
+        }
+    }
+
     pub fn insert(&mut self, record: ConsensusData) {
-        if record.sign_bytes_hash.is_empty() || record.signature.is_empty() {
+        if record.signature.is_empty() {
             return;
         }
 
-        let hash = record.sign_bytes_hash.clone();
+        let Some(key) = Self::key_for(&record) else {
+            return;
+        };
         let slot = SignatureSlot::from(&record);
-        self.by_slot.insert(slot, hash.clone());
-        self.by_hash.insert(hash.clone(), record);
-        self.order.push_back(hash);
+        self.by_slot.insert(slot, key.clone());
+        self.by_key.insert(key.clone(), record);
+        self.order.push_back(key);
 
         while self.order.len() > self.capacity {
-            if let Some(old_hash) = self.order.pop_front() {
-                if let Some(existing) = self.by_hash.remove(&old_hash) {
+            if let Some(old_key) = self.order.pop_front() {
+                if let Some(existing) = self.by_key.remove(&old_key) {
                     let existing_slot = SignatureSlot::from(&existing);
                     if self
                         .by_slot
                         .get(&existing_slot)
-                        .is_some_and(|h| h == &old_hash)
+                        .is_some_and(|h| h == &old_key)
                     {
                         self.by_slot.remove(&existing_slot);
                     }
@@ -309,17 +323,20 @@ impl SignatureCache {
     }
 
     pub fn lookup(&self, record: &ConsensusData) -> SignatureCacheLookup {
+        let Some(key) = Self::key_for(record) else {
+            return SignatureCacheLookup::Miss;
+        };
         let slot = SignatureSlot::from(record);
         match self.by_slot.get(&slot) {
-            Some(existing_hash) if existing_hash == &record.sign_bytes_hash => self
-                .by_hash
-                .get(existing_hash)
+            Some(existing_key) if existing_key == &key => self
+                .by_key
+                .get(existing_key)
                 .cloned()
                 .map(SignatureCacheLookup::Hit)
                 .unwrap_or(SignatureCacheLookup::Miss),
-            Some(existing_hash) => self
-                .by_hash
-                .get(existing_hash)
+            Some(existing_key) => self
+                .by_key
+                .get(existing_key)
                 .cloned()
                 .map(SignatureCacheLookup::Conflict)
                 .unwrap_or(SignatureCacheLookup::Miss),
@@ -337,6 +354,7 @@ mod tests {
             height,
             round,
             step,
+            request_key: vec![hash],
             sign_bytes_hash: vec![hash],
             signature: vec![hash, hash],
             extension_signature: Vec::new(),
@@ -391,6 +409,31 @@ mod tests {
         match cache.lookup(&third) {
             SignatureCacheLookup::Hit(_) => {}
             _ => panic!("third entry should still exist"),
+        }
+    }
+
+    #[test]
+    fn signature_cache_replays_when_sign_bytes_change_but_request_key_is_same() {
+        let mut cache = SignatureCache::new(100);
+        let first = ConsensusData {
+            height: 10,
+            round: 0,
+            step: SignedMsgType::Prevote,
+            request_key: vec![42],
+            sign_bytes_hash: vec![1],
+            signature: vec![7, 7],
+            extension_signature: Vec::new(),
+        };
+        cache.insert(first.clone());
+
+        let timestamp_variant = ConsensusData {
+            sign_bytes_hash: vec![2],
+            ..first
+        };
+
+        match cache.lookup(&timestamp_variant) {
+            SignatureCacheLookup::Hit(found) => assert_eq!(found.signature, vec![7, 7]),
+            _ => panic!("expected cache hit based on request key"),
         }
     }
 }

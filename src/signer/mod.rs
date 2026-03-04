@@ -6,6 +6,7 @@ use crate::error::SignerError;
 use crate::protocol::{Request, Response, ValidRequest};
 use crate::types::{BufferError, SignedMsgType};
 use crate::versions::ProtocolVersion;
+use log::trace;
 use log::{debug, info};
 use prost::Message as _;
 use std::io::{Read, Write};
@@ -49,8 +50,8 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
             ValidRequest::Proposal(proposal) => {
                 let signable_data = V::proposal_to_bytes(&proposal, &self.chain_id)?;
                 let signature = self.signer.sign(&signable_data)?;
-                debug!("Signature: {}", hex::encode(&signature));
-                debug!("Signable data: {}", hex::encode(&signable_data));
+                trace!("Signature: {}", hex::encode(&signature));
+                trace!("Signable data: {}", hex::encode(&signable_data));
                 Ok((signature, None))
             }
             ValidRequest::Vote(vote) => {
@@ -67,16 +68,16 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
                     let extension_signable_data =
                         V::vote_extension_to_bytes(&vote, &self.chain_id)?;
                     let ext_sig = self.signer.sign(&extension_signable_data)?;
-                    debug!(
+                    trace!(
                         "Extension signable data: {}",
                         hex::encode(&extension_signable_data)
                     );
                     debug!("Extension signature: {}", hex::encode(&ext_sig));
                     return Ok((signature, Some(ext_sig)));
                 }
-                info!("no vote ext this time");
-                debug!("Signature: {}", hex::encode(&signature));
-                debug!("Signable data: {}", hex::encode(&signable_data));
+                debug!("no vote ext this time");
+                trace!("Signature: {}", hex::encode(&signature));
+                trace!("Signable data: {}", hex::encode(&signable_data));
                 Ok((signature, None))
             }
         }

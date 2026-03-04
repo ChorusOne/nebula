@@ -248,6 +248,7 @@ mod tests {
                 height: i as i64,
                 round: 0,
                 step: SignedMsgType::Proposal,
+                request_key: vec![i as u8],
                 sign_bytes_hash: vec![i as u8],
                 signature: vec![i as u8, i as u8],
                 extension_signature: Vec::new(),
