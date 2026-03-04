@@ -2,6 +2,7 @@ use super::*;
 use crate::config::{PeerConfig, RaftConfig};
 use crate::types::{ConsensusData, SignedMsgType};
 use std::sync::Arc;
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
@@ -57,7 +58,8 @@ fn single_node_cluster() {
     }];
     let config = create_test_config(8000, 1, &temp_dir, peers);
 
-    let cluster = Arc::new(SignerRaftNode::new(config));
+    let (events_tx, _events_rx) = mpsc::channel();
+    let cluster = Arc::new(SignerRaftNode::new(config, events_tx));
 
     let leader_id = wait_for_leader(&[Arc::clone(&cluster)], Duration::from_secs(5));
     assert_eq!(leader_id, Some(1));
@@ -95,24 +97,19 @@ fn three_node_cluster_basic() {
         },
     ];
 
-    let cluster1 = Arc::new(SignerRaftNode::new(create_test_config(
-        9000,
-        1,
-        &temp_dir,
-        peers.clone(),
-    )));
-    let cluster2 = Arc::new(SignerRaftNode::new(create_test_config(
-        9000,
-        2,
-        &temp_dir,
-        peers.clone(),
-    )));
-    let cluster3 = Arc::new(SignerRaftNode::new(create_test_config(
-        9000,
-        3,
-        &temp_dir,
-        peers.clone(),
-    )));
+    let (events_tx, _events_rx) = mpsc::channel();
+    let cluster1 = Arc::new(SignerRaftNode::new(
+        create_test_config(9000, 1, &temp_dir, peers.clone()),
+        events_tx.clone(),
+    ));
+    let cluster2 = Arc::new(SignerRaftNode::new(
+        create_test_config(9000, 2, &temp_dir, peers.clone()),
+        events_tx.clone(),
+    ));
+    let cluster3 = Arc::new(SignerRaftNode::new(
+        create_test_config(9000, 3, &temp_dir, peers.clone()),
+        events_tx,
+    ));
 
     let clusters = vec![cluster1, cluster2, cluster3];
 

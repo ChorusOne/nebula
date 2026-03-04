@@ -27,6 +27,10 @@ enum RaftMessage {
     Shutdown,
 }
 
+pub enum RaftEvent {
+    LeadershipChanged(u64, u64),
+}
+
 pub struct SignerRaftNode {
     node_id: u64,
     pub signer_state: Arc<RwLock<ConsensusData>>,
@@ -55,7 +59,7 @@ impl SignerRaftNode {
         Ok(())
     }
 
-    pub fn new(config: RaftConfig) -> Self {
+    pub fn new(config: RaftConfig, events_tx: mpsc::Sender<RaftEvent>) -> Self {
         let logger = stdlog_to_slog();
         let storage = create_storage(&config);
         let signer_state = Arc::new(RwLock::new(storage.read_signer_state().unwrap()));
@@ -79,6 +83,7 @@ impl SignerRaftNode {
             logger,
             in_rx,
             out_tx,
+            events_tx,
             Arc::clone(&signer_state),
             Arc::clone(&raft_state),
             Arc::clone(&signature_cache),
@@ -95,13 +100,16 @@ impl SignerRaftNode {
     }
 
     pub fn replicate_state(&self, new_state: &ConsensusData) -> Result<(), SignerError> {
-        info!(
-            "replicating state: {}, leader_id: {}",
-            new_state,
-            self.leader_id().unwrap(),
-        );
+        let leader = self
+            .leader_id()
+            .map(|id| id.to_string())
+            .unwrap_or_else(|| "none".to_string());
+        info!("replicating state: {}, leader_id: {}", new_state, leader,);
         if !self.is_leader() {
-            return Err(SignerError::NotLeader(self.node_id.to_string()));
+            return Err(SignerError::NotLeader(format!(
+                "node {}, current leader {}",
+                self.node_id, leader
+            )));
         }
 
         let (tx, rx) = mpsc::channel();
@@ -131,6 +139,11 @@ impl SignerRaftNode {
 
     pub fn cached_signature_lookup(&self, request_state: &ConsensusData) -> SignatureCacheLookup {
         self.signature_cache.read().unwrap().lookup(request_state)
+    }
+
+    pub fn can_apply_transition(&self, request_state: &ConsensusData) -> bool {
+        let current = self.signer_state.read().unwrap().clone();
+        is_valid_transition(&current, request_state)
     }
 
     pub fn is_leader(&self) -> bool {
@@ -315,6 +328,7 @@ fn start_raft_thread(
     logger: slog::Logger,
     in_rx: mpsc::Receiver<RaftMessage>,
     out_tx: Sender<RaftProtoMessage>,
+    events_tx: Sender<RaftEvent>,
     signer_state: Arc<RwLock<ConsensusData>>,
     raft_state: Arc<RwLock<(StateRole, u64)>>,
     signature_cache: Arc<RwLock<SignatureCache>>,
@@ -379,7 +393,7 @@ fn start_raft_thread(
             } else {
                 timeout -= elapsed;
             }
-            on_ready(
+            let events = on_ready(
                 &mut raft_node,
                 &signer_state,
                 &out_tx,
@@ -387,6 +401,9 @@ fn start_raft_thread(
                 &signature_cache,
                 &mut proposal_callbacks,
             );
+            for event in events {
+                let _ = events_tx.send(event);
+            }
         }
     })
 }
@@ -398,16 +415,24 @@ fn on_ready(
     raft_state: &Arc<RwLock<(StateRole, u64)>>,
     signature_cache: &Arc<RwLock<SignatureCache>>,
     proposal_callbacks: &mut VecDeque<Sender<Result<(), SignerError>>>,
-) {
+) -> Vec<RaftEvent> {
+    let mut events: Vec<RaftEvent> = vec![];
     if !raft_group.has_ready() {
-        return;
+        return events;
     }
 
     let mut ready = raft_group.ready();
 
     if let Some(ss) = ready.ss() {
-        let was_leader = raft_state.read().unwrap().0 == StateRole::Leader;
+        let state = raft_state.read().unwrap();
+        let was_leader = state.0 == StateRole::Leader;
+        let old_leader_id = state.1;
         let is_leader = ss.raft_state == StateRole::Leader;
+        drop(state);
+
+        if ss.leader_id != old_leader_id {
+            events.push(RaftEvent::LeadershipChanged(old_leader_id, ss.leader_id));
+        }
 
         if was_leader && !is_leader {
             warn!(
@@ -490,6 +515,7 @@ fn on_ready(
     }
 
     raft_group.advance_apply();
+    events
 }
 
 fn handle_committed_entries(
@@ -583,7 +609,7 @@ fn apply_consensus_record(
     Ok(())
 }
 
-fn is_valid_transition(current: &ConsensusData, next: &ConsensusData) -> bool {
+pub(crate) fn is_valid_transition(current: &ConsensusData, next: &ConsensusData) -> bool {
     match next.step {
         SignedMsgType::Proposal => {
             if next.height > current.height {

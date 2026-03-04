@@ -92,7 +92,7 @@ A signer should only sign a proposal p if any of the following lines are true:
 
 In other words, a proposal should only be signed if it’s at a higher height, or a higher round for the same height. Once a proposal or vote has been signed for a given height and round, a proposal should never be signed for the same height and round.
 */
-fn should_sign_proposal(state: &ConsensusData, proposal: &Proposal) -> bool {
+pub fn should_sign_proposal(state: &ConsensusData, proposal: &Proposal) -> bool {
     if proposal.step != SignedMsgType::Proposal {
         return false;
     }
@@ -140,7 +140,7 @@ In other words, a vote should only be signed if it’s:
   - a prevote for the same height and round where we haven’t signed a prevote or precommit (but have signed a proposal)
   - a precommit for the same height and round where we haven’t signed a precommit (but have signed a proposal and/or a prevote)
 */
-fn should_sign_vote(state: &ConsensusData, vote: &Vote) -> bool {
+pub fn should_sign_vote(state: &ConsensusData, vote: &Vote) -> bool {
     info!(
         "checking if vote should be signed, state: {}, vote: {}/{}/{:?}",
         state, vote.height, vote.round, vote.step

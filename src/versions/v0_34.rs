@@ -68,7 +68,14 @@ impl ProtocolVersion for VersionV0_34 {
         todo!()
     }
 
-    fn create_error_response(_message: &str) -> Response<Self::ProposalResponse, Self::VoteResponse, Self::PubKeyResponse, Self::PingResponse> {
+    fn create_error_response(
+        _message: &str,
+    ) -> Response<
+        Self::ProposalResponse,
+        Self::VoteResponse,
+        Self::PubKeyResponse,
+        Self::PingResponse,
+    > {
         todo!()
     }
 

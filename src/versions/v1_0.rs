@@ -32,9 +32,7 @@ impl ProtocolVersion for VersionV1_0 {
             Some(v1::privval::message::Sum::SignProposalRequest(req)) => {
                 let proposal = req.proposal.ok_or(SignerError::InvalidData)?;
                 Ok((
-                    Request::Proposal(tendermint_proposal_to_domain(
-                        proposal,
-                    )?),
+                    Request::Proposal(tendermint_proposal_to_domain(proposal)?),
                     req.chain_id,
                 ))
             }
@@ -158,7 +156,10 @@ impl ProtocolVersion for VersionV1_0 {
             vote: None,
             error: Some(v1::privval::RemoteSignerError {
                 code: 1,
-                description: format!("Would double-sign vote at height/round/step {}/{}/{:?}", cd.height, cd.round, cd.step),
+                description: format!(
+                    "Would double-sign vote at height/round/step {}/{}/{:?}",
+                    cd.height, cd.round, cd.step
+                ),
             }),
         }
     }
@@ -168,7 +169,10 @@ impl ProtocolVersion for VersionV1_0 {
             proposal: None,
             error: Some(v1::privval::RemoteSignerError {
                 code: 1,
-                description: format!("Would double-sign proposal at height/round/step {}/{}/{:?}", cd.height, cd.round, cd.step),
+                description: format!(
+                    "Would double-sign proposal at height/round/step {}/{}/{:?}",
+                    cd.height, cd.round, cd.step
+                ),
             }),
         }
     }
@@ -234,7 +238,14 @@ impl ProtocolVersion for VersionV1_0 {
         v1::privval::PingResponse {}
     }
 
-    fn create_error_response(message: &str) -> Response<Self::ProposalResponse, Self::VoteResponse, Self::PubKeyResponse, Self::PingResponse> {
+    fn create_error_response(
+        message: &str,
+    ) -> Response<
+        Self::ProposalResponse,
+        Self::VoteResponse,
+        Self::PubKeyResponse,
+        Self::PingResponse,
+    > {
         Response::SignedProposal(v1::privval::SignedProposalResponse {
             proposal: None,
             error: Some(v1::privval::RemoteSignerError {

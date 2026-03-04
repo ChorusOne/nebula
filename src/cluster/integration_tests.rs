@@ -93,7 +93,8 @@ fn create_test_node(
         peers,
         initial_state_path: "./non_existent_initial_state.json".to_string(),
     };
-    SignerRaftNode::new(config)
+    let (events_tx, _events_rx) = mpsc::channel();
+    SignerRaftNode::new(config, events_tx)
 }
 
 fn wait_for_leader(nodes: &[SignerRaftNode], timeout: Duration) -> Option<&SignerRaftNode> {
@@ -577,9 +578,9 @@ fn rapid_round_advancement() {
     }
 }
 
-// sign block, leader failover, get request to sign old block, what happens
+// sign block, leader failover, re-request same block -> should return cached signature
 #[test]
-fn double_sign_prevention_after_leadership_change() {
+fn idempotent_signing_after_leadership_change() {
     let harness = TestHarness::new(3);
     let nodes = harness.nodes;
     let (initial_leader, mut followers) = wait_for_leader_and_pop(nodes);
@@ -596,12 +597,13 @@ fn double_sign_prevention_after_leadership_change() {
     let response_msg =
         v0_38::privval::Message::decode_length_delimited(response_bytes.as_slice()).unwrap();
 
-    match response_msg.sum {
+    let initial_signature = match response_msg.sum {
         Some(v0_38::privval::message::Sum::SignedProposalResponse(res)) => {
             assert!(res.error.is_none(), "Initial signing should succeed");
+            res.proposal.expect("proposal should be present").signature
         }
         _ => panic!("Expected SignedProposalResponse"),
-    }
+    };
 
     let initial_leader = unwrap_node(leader);
     initial_leader
@@ -627,15 +629,17 @@ fn double_sign_prevention_after_leadership_change() {
 
     match response_msg2.sum {
         Some(v0_38::privval::message::Sum::SignedProposalResponse(res)) => {
-            assert!(res.error.is_some(), "Duplicate signing should be prevented");
-            let error_desc = res.error.unwrap().description;
             assert!(
-                error_desc.contains("double-sign") || error_desc.contains("Would double-sign"),
-                "Error should mention double signing, got: {}",
-                error_desc
+                res.error.is_none(),
+                "Same canonical request should return cached signature"
+            );
+            let second_signature = res.proposal.expect("proposal should be present").signature;
+            assert_eq!(
+                second_signature, initial_signature,
+                "Duplicate request should return identical signature"
             );
         }
-        _ => panic!("Expected SignedProposalResponse with error"),
+        _ => panic!("Expected SignedProposalResponse"),
     }
 
     let new_req_bytes = create_proposal_request_bytes(101, 0);

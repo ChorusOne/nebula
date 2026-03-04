@@ -12,6 +12,7 @@ mod types;
 mod versions;
 
 use crate::backend::SigningBackend;
+use crate::cluster::RaftEvent;
 use crate::error::SignerError;
 use crate::protocol::Response;
 use clap::{Parser as _, Subcommand};
@@ -25,7 +26,8 @@ use signer::Signer;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::str::FromStr;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 use tendermint_p2p::secret_connection::SecretConnection;
@@ -110,11 +112,15 @@ fn main() -> Result<(), SignerError> {
 fn start_signer(config: Config) -> Result<(), SignerError> {
     info!("Chain ID: {}", config.chain_id);
     info!("Protocol version: {:?}", config.version);
+    let (tx, rx) = mpsc::channel::<RaftEvent>();
+    let mut raft_node_id: Option<u64> = None;
     let state_persist: Arc<Mutex<PersistVariants>> = match &config.persist {
         PersistConfig::Raft { raft } => {
             info!("Node ID: {}", raft.node_id);
+            raft_node_id = Some(raft.node_id);
             Arc::new(Mutex::new(PersistVariants::Raft(SignerRaftNode::new(
                 raft.clone(),
+                tx.clone(),
             ))))
         }
         PersistConfig::Local { local } => {
@@ -125,14 +131,60 @@ fn start_signer(config: Config) -> Result<(), SignerError> {
         }
     };
 
+    if let Some(node_id) = raft_node_id {
+        let mut leader_loop: Option<LeaderLoopHandle> = None;
+
+        if let Ok(guard) = state_persist.lock() {
+            if let PersistVariants::Raft(node) = &*guard {
+                if node.is_leader() {
+                    leader_loop = Some(start_leader_loop(
+                        config.clone(),
+                        Arc::clone(&state_persist),
+                    ));
+                }
+            }
+        }
+
+        loop {
+            match rx.recv() {
+                Ok(RaftEvent::LeadershipChanged(from, to)) => {
+                    info!("Leadership changed from: {}, to: {}", from, to);
+                    if to == node_id {
+                        if leader_loop.is_none() {
+                            leader_loop = Some(start_leader_loop(
+                                config.clone(),
+                                Arc::clone(&state_persist),
+                            ));
+                        }
+                    } else if leader_loop.is_some() {
+                        stop_leader_loop(&mut leader_loop);
+                    }
+                }
+                Err(_) => {
+                    warn!("Raft event channel closed; shutting down leader loop");
+                    stop_leader_loop(&mut leader_loop);
+                    break;
+                }
+            }
+        }
+        return Ok(());
+    }
+
+    let stop = Arc::new(AtomicBool::new(false));
     loop {
-        // TODO: don't connect if we are not the master; it will block the master from connecting
-        // and we need to close the connection on leadership loss
         let result = match config.version {
-            ProtocolVersionConfig::V0_34 => run_leader::<VersionV0_34>(&config, &state_persist),
-            ProtocolVersionConfig::V0_37 => run_leader::<VersionV0_37>(&config, &state_persist),
-            ProtocolVersionConfig::V0_38 => run_leader::<VersionV0_38>(&config, &state_persist),
-            ProtocolVersionConfig::V1_0 => run_leader::<VersionV1_0>(&config, &state_persist),
+            ProtocolVersionConfig::V0_34 => {
+                run_leader::<VersionV0_34>(&config, &state_persist, &stop)
+            }
+            ProtocolVersionConfig::V0_37 => {
+                run_leader::<VersionV0_37>(&config, &state_persist, &stop)
+            }
+            ProtocolVersionConfig::V0_38 => {
+                run_leader::<VersionV0_38>(&config, &state_persist, &stop)
+            }
+            ProtocolVersionConfig::V1_0 => {
+                run_leader::<VersionV1_0>(&config, &state_persist, &stop)
+            }
         };
 
         match result {
@@ -142,9 +194,52 @@ fn start_signer(config: Config) -> Result<(), SignerError> {
     }
 }
 
+struct LeaderLoopHandle {
+    stop: Arc<AtomicBool>,
+    join: thread::JoinHandle<()>,
+}
+
+fn start_leader_loop(config: Config, persist: Arc<Mutex<PersistVariants>>) -> LeaderLoopHandle {
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_for_thread = Arc::clone(&stop);
+    let join = thread::spawn(move || {
+        let result = match config.version {
+            ProtocolVersionConfig::V0_34 => {
+                run_leader::<VersionV0_34>(&config, &persist, &stop_for_thread)
+            }
+            ProtocolVersionConfig::V0_37 => {
+                run_leader::<VersionV0_37>(&config, &persist, &stop_for_thread)
+            }
+            ProtocolVersionConfig::V0_38 => {
+                run_leader::<VersionV0_38>(&config, &persist, &stop_for_thread)
+            }
+            ProtocolVersionConfig::V1_0 => {
+                run_leader::<VersionV1_0>(&config, &persist, &stop_for_thread)
+            }
+        };
+
+        match result {
+            Ok(()) => warn!("Leader loop exited normally"),
+            Err(e) => error!("Leader loop error: {}", e),
+        }
+    });
+
+    LeaderLoopHandle { stop, join }
+}
+
+fn stop_leader_loop(handle: &mut Option<LeaderLoopHandle>) {
+    if let Some(handle) = handle.take() {
+        handle.stop.store(true, Ordering::SeqCst);
+        if let Err(e) = handle.join.join() {
+            warn!("Leader loop thread panicked: {:?}", e);
+        }
+    }
+}
+
 fn run_leader<V: ProtocolVersion + Send + 'static>(
     config: &Config,
     persist: &Arc<Mutex<PersistVariants>>,
+    stop: &Arc<AtomicBool>,
 ) -> Result<(), SignerError> {
     info!(
         "Running leader loop for {} connections",
@@ -161,9 +256,10 @@ fn run_leader<V: ProtocolVersion + Send + 'static>(
             let p = Arc::clone(persist);
             let host = conn.host.clone();
             let port = conn.port;
+            let stop = Arc::clone(stop);
 
             info!("connecting to {host}:{port}");
-            thread::spawn(move || handle_connection::<V>(host, port, config, p))
+            thread::spawn(move || handle_connection::<V>(host, port, config, p, stop))
         })
         .collect();
 
@@ -181,17 +277,34 @@ fn handle_connection<V: ProtocolVersion + Send + 'static>(
     port: u16,
     config: Arc<Config>,
     persist: Arc<Mutex<PersistVariants>>,
+    stop: Arc<AtomicBool>,
 ) -> Result<(), SignerError> {
     let mut retry_count = 0;
     let identity_key = ed25519_consensus::SigningKey::new(rand_core::OsRng);
 
-    let mut signer = crate::signer::create_signer::<V>(&host, port, &identity_key, &config)?;
+    let mut signer =
+        crate::signer::create_signer::<V>(&host, port, &identity_key, &config, Some(&stop))?;
 
     loop {
+        if stop.load(Ordering::SeqCst) {
+            break;
+        }
+
         let response = handle_single_request(&mut signer, &persist);
         if let Err(ref e) = response {
+            if let SignerError::IoError(io) = e {
+                if io.kind() == std::io::ErrorKind::TimedOut
+                    || io.kind() == std::io::ErrorKind::WouldBlock
+                {
+                    if stop.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    continue;
+                }
+            }
+
             error!("Error handling request from {}:{} - {}", host, port, e);
-            match reconnect::<V>(&host, port, &identity_key, &config, &mut retry_count) {
+            match reconnect::<V>(&host, port, &identity_key, &config, &mut retry_count, &stop) {
                 Ok(new_signer) => signer = new_signer,
                 Err(_) => continue,
             }
@@ -199,6 +312,7 @@ fn handle_connection<V: ProtocolVersion + Send + 'static>(
             retry_count = 0;
         }
     }
+    Ok(())
 }
 
 enum RequestProcessingAction<V: ProtocolVersion> {
@@ -273,24 +387,28 @@ pub fn handle_single_request<T: SigningBackend, V: ProtocolVersion, C: Read + Wr
     let mut guard = persist.lock().unwrap();
     let response = match (&mut *guard, request) {
         (PersistVariants::Raft(raft_node), Request::Proposal(proposal)) => {
-            let signable = V::proposal_to_bytes(&proposal, signer.chain_id())?;
-            let mut request_state = ConsensusData::from(&ValidRequest::Proposal(proposal.clone()));
-            request_state.sign_bytes_hash = sign_bytes_hash(&signable);
+            if !raft_node.is_leader() {
+                V::create_error_response("Not leader")
+            } else {
+                let signable = V::proposal_to_bytes(&proposal, signer.chain_id())?;
+                let mut request_state =
+                    ConsensusData::from(&ValidRequest::Proposal(proposal.clone()));
+                request_state.sign_bytes_hash = sign_bytes_hash(&signable);
 
-            match raft_node.cached_signature_lookup(&request_state) {
-                types::SignatureCacheLookup::Hit(cached) => {
-                    proposal_response_from_signature::<V>(&proposal, cached.signature)
-                }
-                types::SignatureCacheLookup::Conflict(_) => {
-                    Response::SignedProposal(V::create_double_sign_prop_response(&request_state))
-                }
-                types::SignatureCacheLookup::Miss => {
-                    let consensus_state = raft_node.signer_state.read().unwrap().clone();
-                    match proposal.clone().check(&consensus_state) {
-                        CheckedProposalRequest::DoubleSignProposal(cd) => {
-                            Response::SignedProposal(V::create_double_sign_prop_response(&cd))
-                        }
-                        CheckedProposalRequest::ValidRequest(valid) => {
+                match raft_node.cached_signature_lookup(&request_state) {
+                    types::SignatureCacheLookup::Hit(cached) => {
+                        proposal_response_from_signature::<V>(&proposal, cached.signature)
+                    }
+                    types::SignatureCacheLookup::Conflict(_) => Response::SignedProposal(
+                        V::create_double_sign_prop_response(&request_state),
+                    ),
+                    types::SignatureCacheLookup::Miss => {
+                        if !raft_node.can_apply_transition(&request_state) {
+                            Response::SignedProposal(V::create_double_sign_prop_response(
+                                &request_state,
+                            ))
+                        } else {
+                            let valid = ValidRequest::Proposal(proposal.clone());
                             let (signature, _) = signer.sign_request(&valid)?;
                             request_state.signature = signature.clone();
 
@@ -302,7 +420,9 @@ pub fn handle_single_request<T: SigningBackend, V: ProtocolVersion, C: Read + Wr
                                             cached.signature,
                                         )
                                     }
-                                    _ => proposal_response_from_signature::<V>(&proposal, signature),
+                                    _ => {
+                                        proposal_response_from_signature::<V>(&proposal, signature)
+                                    }
                                 },
                                 Err(e) => {
                                     error!("Could not persist state: {e:?}");
@@ -317,26 +437,30 @@ pub fn handle_single_request<T: SigningBackend, V: ProtocolVersion, C: Read + Wr
             }
         }
         (PersistVariants::Raft(raft_node), Request::Vote(vote)) => {
-            let signable = V::vote_to_bytes(&vote, signer.chain_id())?;
-            let mut request_state = ConsensusData::from(&ValidRequest::Vote(vote.clone()));
-            request_state.sign_bytes_hash = sign_bytes_hash(&signable);
+            if !raft_node.is_leader() {
+                V::create_error_response("Not leader")
+            } else {
+                let signable = V::vote_to_bytes(&vote, signer.chain_id())?;
+                let mut request_state = ConsensusData::from(&ValidRequest::Vote(vote.clone()));
+                request_state.sign_bytes_hash = sign_bytes_hash(&signable);
 
-            match raft_node.cached_signature_lookup(&request_state) {
-                types::SignatureCacheLookup::Hit(cached) => vote_response_from_signature::<V>(
-                    &vote,
-                    cached.signature,
-                    (!cached.extension_signature.is_empty()).then_some(cached.extension_signature),
-                ),
-                types::SignatureCacheLookup::Conflict(_) => {
-                    Response::SignedVote(V::create_double_sign_vote_response(&request_state))
-                }
-                types::SignatureCacheLookup::Miss => {
-                    let consensus_state = raft_node.signer_state.read().unwrap().clone();
-                    match vote.clone().check(&consensus_state) {
-                        CheckedVoteRequest::DoubleSignVote(cd) => {
-                            Response::SignedVote(V::create_double_sign_vote_response(&cd))
-                        }
-                        CheckedVoteRequest::ValidRequest(valid) => {
+                match raft_node.cached_signature_lookup(&request_state) {
+                    types::SignatureCacheLookup::Hit(cached) => vote_response_from_signature::<V>(
+                        &vote,
+                        cached.signature,
+                        (!cached.extension_signature.is_empty())
+                            .then_some(cached.extension_signature),
+                    ),
+                    types::SignatureCacheLookup::Conflict(_) => {
+                        Response::SignedVote(V::create_double_sign_vote_response(&request_state))
+                    }
+                    types::SignatureCacheLookup::Miss => {
+                        if !raft_node.can_apply_transition(&request_state) {
+                            Response::SignedVote(V::create_double_sign_vote_response(
+                                &request_state,
+                            ))
+                        } else {
+                            let valid = ValidRequest::Vote(vote.clone());
                             let (signature, extension_signature) = signer.sign_request(&valid)?;
                             request_state.signature = signature.clone();
                             request_state.extension_signature =
@@ -421,10 +545,17 @@ fn reconnect<V: ProtocolVersion>(
     identity_key: &ed25519_consensus::SigningKey,
     config: &Config,
     retry_count: &mut u32,
+    stop: &AtomicBool,
 ) -> Result<Signer<Box<dyn SigningBackend>, V, SecretConnection<TcpStream>>, SignerError> {
     const MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
 
     loop {
+        if stop.load(Ordering::SeqCst) {
+            return Err(SignerError::Other(
+                "Connection attempt cancelled".to_string(),
+            ));
+        }
+
         *retry_count += 1;
         let delay =
             Duration::from_millis(100 * 2_u64.pow((*retry_count).min(10))).min(MAX_RETRY_DELAY);
@@ -435,7 +566,13 @@ fn reconnect<V: ProtocolVersion>(
         );
         thread::sleep(delay);
 
-        match crate::signer::create_signer::<V>(host, port, identity_key, config) {
+        if stop.load(Ordering::SeqCst) {
+            return Err(SignerError::Other(
+                "Connection attempt cancelled".to_string(),
+            ));
+        }
+
+        match crate::signer::create_signer::<V>(host, port, identity_key, config, Some(stop)) {
             Ok(signer) => {
                 info!("Successfully reconnected to {}:{}", host, port);
                 *retry_count = 0;
