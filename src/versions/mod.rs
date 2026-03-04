@@ -32,6 +32,14 @@ pub trait ProtocolVersion {
     fn proposal_to_bytes(proposal: &Proposal, chain_id: &str) -> Result<Vec<u8>, SignerError>;
     fn vote_to_bytes(vote: &Vote, chain_id: &str) -> Result<Vec<u8>, SignerError>;
     fn vote_extension_to_bytes(vote: &Vote, chain_id: &str) -> Result<Vec<u8>, SignerError>;
+    fn proposal_sign_bytes_only_differ_by_timestamp(
+        old_sign_bytes: &[u8],
+        new_sign_bytes: &[u8],
+    ) -> Result<bool, SignerError>;
+    fn vote_sign_bytes_only_differ_by_timestamp(
+        old_sign_bytes: &[u8],
+        new_sign_bytes: &[u8],
+    ) -> Result<bool, SignerError>;
     fn create_proposal_response(proposal: &Proposal, signature: Vec<u8>) -> Self::ProposalResponse;
     fn create_double_sign_prop_response(cd: &ConsensusData) -> Self::ProposalResponse;
     fn create_double_sign_vote_response(cd: &ConsensusData) -> Self::VoteResponse;

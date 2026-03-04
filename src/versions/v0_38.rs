@@ -50,10 +50,8 @@ impl ProtocolVersion for VersionV0_38 {
     ) -> Result<Vec<u8>, SignerError> {
         let mut buf = Vec::new();
         let msg = match response {
-            Response::SignedVote(resp) => v0_38::privval::message::Sum::SignedVoteResponse(resp),
-            Response::SignedProposal(resp) => {
-                v0_38::privval::message::Sum::SignedProposalResponse(resp)
-            }
+            Response::Vote(resp) => v0_38::privval::message::Sum::SignedVoteResponse(resp),
+            Response::Proposal(resp) => v0_38::privval::message::Sum::SignedProposalResponse(resp),
             Response::Ping(resp) => v0_38::privval::message::Sum::PingResponse(resp),
             Response::PublicKey(resp) => v0_38::privval::message::Sum::PubKeyResponse(resp),
         };
@@ -146,13 +144,35 @@ impl ProtocolVersion for VersionV0_38 {
         Ok(bytes)
     }
 
+    fn proposal_sign_bytes_only_differ_by_timestamp(
+        old_sign_bytes: &[u8],
+        new_sign_bytes: &[u8],
+    ) -> Result<bool, SignerError> {
+        let mut old = v0_38::types::CanonicalProposal::decode_length_delimited(old_sign_bytes)?;
+        let mut new = v0_38::types::CanonicalProposal::decode_length_delimited(new_sign_bytes)?;
+        old.timestamp = None;
+        new.timestamp = None;
+        Ok(old == new)
+    }
+
+    fn vote_sign_bytes_only_differ_by_timestamp(
+        old_sign_bytes: &[u8],
+        new_sign_bytes: &[u8],
+    ) -> Result<bool, SignerError> {
+        let mut old = v0_38::types::CanonicalVote::decode_length_delimited(old_sign_bytes)?;
+        let mut new = v0_38::types::CanonicalVote::decode_length_delimited(new_sign_bytes)?;
+        old.timestamp = None;
+        new.timestamp = None;
+        Ok(old == new)
+    }
+
     fn create_double_sign_vote_response(cd: &ConsensusData) -> Self::VoteResponse {
         v0_38::privval::SignedVoteResponse {
             vote: None,
             error: Some(v0_38::privval::RemoteSignerError {
                 code: 1,
                 description: format!(
-                    "Would double-sign vote at height/round/step {}/{}/{:?}",
+                    "Vote at height/round/step {}/{}/{:?} has already been signed by another CometBFT node connected to nebula",
                     cd.height, cd.round, cd.step
                 ),
             }),
@@ -164,7 +184,7 @@ impl ProtocolVersion for VersionV0_38 {
             error: Some(v0_38::privval::RemoteSignerError {
                 code: 1,
                 description: format!(
-                    "Would double-sign proposal at height/round/step {}/{}/{:?}",
+                    "Proposal at height/round/step {}/{}/{:?} has already been signed by another CometBFT node connected to nebula",
                     cd.height, cd.round, cd.step
                 ),
             }),
@@ -251,7 +271,7 @@ impl ProtocolVersion for VersionV0_38 {
         Self::PubKeyResponse,
         Self::PingResponse,
     > {
-        Response::SignedProposal(v0_38::privval::SignedProposalResponse {
+        Response::Proposal(v0_38::privval::SignedProposalResponse {
             proposal: None,
             error: Some(v0_38::privval::RemoteSignerError {
                 code: 1,

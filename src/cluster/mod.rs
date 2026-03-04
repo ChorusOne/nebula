@@ -23,8 +23,13 @@ enum RaftMessage {
     Propose(ConsensusData, Sender<Result<(), SignerError>>),
     Msg(RaftProtoMessage),
     TransferLeadership(u64),
-    #[allow(dead_code)]
+    #[cfg(test)]
     Shutdown,
+}
+
+pub enum RaftEvent {
+    LeadershipChanged(u64, u64),
+    StateApplied { node_id: u64, data: ConsensusData },
 }
 
 pub struct SignerRaftNode {
@@ -32,12 +37,12 @@ pub struct SignerRaftNode {
     pub signer_state: Arc<RwLock<ConsensusData>>,
     proposal_sender: Sender<RaftMessage>,
     raft_state: Arc<RwLock<(StateRole, u64)>>,
-    #[allow(dead_code)]
+    #[cfg(test)]
     shutdown_handle: Arc<RwLock<Option<thread::JoinHandle<()>>>>,
 }
 
 impl SignerRaftNode {
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn shutdown(&self) -> Result<(), SignerError> {
         info!("Shutting down node {}", self.node_id);
 
@@ -54,7 +59,7 @@ impl SignerRaftNode {
         Ok(())
     }
 
-    pub fn new(config: RaftConfig) -> Self {
+    pub fn new(config: RaftConfig, events_tx: mpsc::Sender<RaftEvent>) -> Self {
         let logger = stdlog_to_slog();
         let storage = create_storage(&config);
         let signer_state = Arc::new(RwLock::new(storage.read_signer_state().unwrap()));
@@ -66,38 +71,43 @@ impl SignerRaftNode {
         start_inbound_handler(config.bind_addr.clone(), in_tx.clone());
         start_outbound_handler(out_rx, config.peers.clone(), config.node_id);
 
-        let handle = start_raft_thread(
-            config.node_id,
+        let _handle = start_raft_thread(RaftThreadConfig {
+            node_id: config.node_id,
             storage,
             logger,
             in_rx,
             out_tx,
-            Arc::clone(&signer_state),
-            Arc::clone(&raft_state),
-        );
+            events_tx,
+            signer_state: Arc::clone(&signer_state),
+            raft_state: Arc::clone(&raft_state),
+        });
 
         SignerRaftNode {
             signer_state,
             proposal_sender: in_tx,
             raft_state,
             node_id: config.node_id,
-            shutdown_handle: Arc::new(RwLock::new(Some(handle))),
+            #[cfg(test)]
+            shutdown_handle: Arc::new(RwLock::new(Some(_handle))),
         }
     }
 
     pub fn replicate_state(&self, new_state: &ConsensusData) -> Result<(), SignerError> {
-        info!(
-            "replicating state: {}, leader_id: {}",
-            new_state,
-            self.leader_id().unwrap(),
-        );
+        let leader = self
+            .leader_id()
+            .map(|id| id.to_string())
+            .expect("Cannot replicate state without a leader elected");
+        info!("replicating state: {}, leader_id: {}", new_state, leader,);
         if !self.is_leader() {
-            return Err(SignerError::NotLeader(self.node_id.to_string()));
+            return Err(SignerError::NotLeader(format!(
+                "node {}, current leader {}",
+                self.node_id, leader
+            )));
         }
 
         let (tx, rx) = mpsc::channel();
         self.proposal_sender
-            .send(RaftMessage::Propose(*new_state, tx))
+            .send(RaftMessage::Propose(new_state.clone(), tx))
             .map_err(|e| {
                 SignerError::Other(format!("Failed to send proposal to raft thread: {}", e))
             })?;
@@ -296,22 +306,66 @@ fn start_outbound_handler(
     });
 }
 
-fn start_raft_thread(
+struct RaftThreadConfig {
     node_id: u64,
     storage: RocksDBStorage,
     logger: slog::Logger,
     in_rx: mpsc::Receiver<RaftMessage>,
     out_tx: Sender<RaftProtoMessage>,
+    events_tx: Sender<RaftEvent>,
     signer_state: Arc<RwLock<ConsensusData>>,
     raft_state: Arc<RwLock<(StateRole, u64)>>,
-) -> thread::JoinHandle<()> {
+}
+
+fn start_raft_thread(cfg: RaftThreadConfig) -> thread::JoinHandle<()> {
     thread::spawn(move || {
+        let RaftThreadConfig {
+            node_id,
+            storage,
+            logger,
+            in_rx,
+            out_tx,
+            events_tx,
+            signer_state,
+            raft_state,
+        } = cfg;
+
+        // The highest log position that is known to be in stable storage
+        // on a quorum of nodes.
+        //
+        // Invariant: applied <= committed
+        // pub committed: u64,
+
+        // The highest log position that is known to be persisted in stable
+        // storage. It's used for limiting the upper bound of committed and
+        // persisted entries.
+        //
+        // Invariant: persisted < unstable.offset && applied <= persisted
+        // pub persisted: u64,
+
+        // The highest log position that the application has been instructed
+        // to apply to its state machine.
+        //
+        // Invariant: applied <= min(committed, persisted)
+        // pub applied: u64,
+        let initial_state = storage.initial_state().unwrap();
+        let persisted_commit = initial_state.hard_state.get_commit();
+        let persisted_applied = storage.applied_index().unwrap();
+        let applied_index = persisted_applied.min(persisted_commit);
+        if persisted_applied > persisted_commit {
+            warn!(
+                "persisted applied index {} is ahead of persisted commit {}; clamping restart applied to {}",
+                persisted_applied, persisted_commit, applied_index
+            );
+        }
+
         let raft_cfg = RaftCoreConfig {
             id: node_id,
             election_tick: 10,
             check_quorum: true,
             pre_vote: true,
             heartbeat_tick: 3,
+            applied: applied_index,
             ..Default::default()
         };
         raft_cfg.validate().unwrap();
@@ -333,6 +387,7 @@ fn start_raft_thread(
                 Ok(RaftMessage::TransferLeadership(transferee_id)) => {
                     raft_node.transfer_leader(transferee_id);
                 }
+                #[cfg(test)]
                 Ok(RaftMessage::Shutdown) => {
                     info!("Raft thread received shutdown signal");
                     for callback in proposal_callbacks.drain(..) {
@@ -353,13 +408,16 @@ fn start_raft_thread(
             } else {
                 timeout -= elapsed;
             }
-            on_ready(
+            let events = on_ready(
                 &mut raft_node,
                 &signer_state,
                 &out_tx,
                 &raft_state,
                 &mut proposal_callbacks,
             );
+            for event in events {
+                let _ = events_tx.send(event);
+            }
         }
     })
 }
@@ -370,16 +428,24 @@ fn on_ready(
     net_tx: &Sender<RaftProtoMessage>,
     raft_state: &Arc<RwLock<(StateRole, u64)>>,
     proposal_callbacks: &mut VecDeque<Sender<Result<(), SignerError>>>,
-) {
+) -> Vec<RaftEvent> {
+    let mut events: Vec<RaftEvent> = vec![];
     if !raft_group.has_ready() {
-        return;
+        return events;
     }
 
     let mut ready = raft_group.ready();
 
     if let Some(ss) = ready.ss() {
-        let was_leader = raft_state.read().unwrap().0 == StateRole::Leader;
+        let state = raft_state.read().unwrap();
+        let was_leader = state.0 == StateRole::Leader;
+        let old_leader_id = state.1;
         let is_leader = ss.raft_state == StateRole::Leader;
+        drop(state);
+
+        if ss.leader_id != old_leader_id {
+            events.push(RaftEvent::LeadershipChanged(old_leader_id, ss.leader_id));
+        }
 
         if was_leader && !is_leader {
             warn!(
@@ -407,7 +473,7 @@ fn on_ready(
         raft_group.mut_store().apply_snapshot(snap.clone()).unwrap();
 
         if let Some(sm_data) = ConsensusData::from_bytes(snap.get_data()) {
-            info!("loaded state machine from snapshot: {:?}", sm_data);
+            info!("loaded state machine from snapshot: {}", sm_data);
             *signer_state.write().unwrap() = sm_data;
         }
     }
@@ -433,10 +499,19 @@ fn on_ready(
             ready.take_committed_entries(),
             signer_state,
             proposal_callbacks,
+            &mut events,
         );
     }
 
     let mut light_rd = raft_group.advance(ready);
+
+    if let Some(commit_index) = light_rd.commit_index() {
+        info!("updating commit index");
+        raft_group
+            .mut_store()
+            .set_commit_index(commit_index)
+            .unwrap();
+    }
 
     for msg in light_rd.take_messages() {
         let _ = net_tx.send(msg);
@@ -448,10 +523,12 @@ fn on_ready(
             light_rd.take_committed_entries(),
             signer_state,
             proposal_callbacks,
+            &mut events,
         );
     }
 
     raft_group.advance_apply();
+    events
 }
 
 fn handle_committed_entries(
@@ -459,20 +536,20 @@ fn handle_committed_entries(
     committed_entries: Vec<raft_proto::eraftpb::Entry>,
     signer_state: &Arc<RwLock<ConsensusData>>,
     proposal_callbacks: &mut VecDeque<Sender<Result<(), SignerError>>>,
+    events: &mut Vec<RaftEvent>,
 ) {
+    let mut last_applied = None;
     for ent in committed_entries {
+        last_applied = Some(ent.get_index());
         match ent.get_entry_type() {
             EntryType::EntryNormal => {
                 if !ent.get_data().is_empty() {
                     if let Some(ns) = ConsensusData::from_bytes(ent.get_data()) {
-                        info!(
-                            "applying normal entry received from master: {}, current node state: {}, node_id: {}",
-                            ns,
-                            signer_state.read().unwrap(),
-                            raft_group.raft.id,
-                        );
-                        *signer_state.write().unwrap() = ns;
-                        raft_group.mut_store().write_signer_state(&ns).unwrap();
+                        apply_consensus_record(raft_group, signer_state, ns.clone());
+                        events.push(RaftEvent::StateApplied {
+                            node_id: raft_group.raft.id,
+                            data: ns,
+                        });
 
                         if let Some(callback) = proposal_callbacks.pop_front() {
                             if let Err(e) = callback.send(Ok(())) {
@@ -494,6 +571,26 @@ fn handle_committed_entries(
             }
         }
     }
+
+    if let Some(index) = last_applied {
+        raft_group.mut_store().set_applied_index(index).unwrap();
+    }
+}
+
+// TODO: more graceful errors than unwrap
+fn apply_consensus_record(
+    raft_group: &mut RawNode<RocksDBStorage>,
+    signer_state: &Arc<RwLock<ConsensusData>>,
+    next: ConsensusData,
+) {
+    let current = signer_state.read().unwrap().clone();
+
+    info!(
+        "applying normal entry: {}, current node state: {}, node_id: {}",
+        next, current, raft_group.raft.id,
+    );
+    *signer_state.write().unwrap() = next.clone();
+    raft_group.mut_store().write_signer_state(&next).unwrap();
 }
 
 #[cfg(test)]

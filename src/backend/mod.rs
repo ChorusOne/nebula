@@ -202,7 +202,6 @@ mod tests {
     use crate::backend::Bls12381Signer;
     use crate::backend::SigningBackend;
     use base64::{Engine as _, engine::general_purpose};
-    use hex;
 
     #[test]
     fn bls12381_sign_known_data() {

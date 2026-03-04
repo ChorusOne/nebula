@@ -32,9 +32,7 @@ impl ProtocolVersion for VersionV1_0 {
             Some(v1::privval::message::Sum::SignProposalRequest(req)) => {
                 let proposal = req.proposal.ok_or(SignerError::InvalidData)?;
                 Ok((
-                    Request::Proposal(tendermint_proposal_to_domain(
-                        proposal,
-                    )?),
+                    Request::Proposal(tendermint_proposal_to_domain(proposal)?),
                     req.chain_id,
                 ))
             }
@@ -56,10 +54,8 @@ impl ProtocolVersion for VersionV1_0 {
     ) -> Result<Vec<u8>, SignerError> {
         let mut buf = Vec::new();
         let msg = match response {
-            Response::SignedVote(resp) => v1::privval::message::Sum::SignedVoteResponse(resp),
-            Response::SignedProposal(resp) => {
-                v1::privval::message::Sum::SignedProposalResponse(resp)
-            }
+            Response::Vote(resp) => v1::privval::message::Sum::SignedVoteResponse(resp),
+            Response::Proposal(resp) => v1::privval::message::Sum::SignedProposalResponse(resp),
             Response::Ping(resp) => v1::privval::message::Sum::PingResponse(resp),
             Response::PublicKey(resp) => v1::privval::message::Sum::PubKeyResponse(resp),
         };
@@ -153,12 +149,37 @@ impl ProtocolVersion for VersionV1_0 {
         Ok(bytes)
     }
 
+    fn proposal_sign_bytes_only_differ_by_timestamp(
+        old_sign_bytes: &[u8],
+        new_sign_bytes: &[u8],
+    ) -> Result<bool, SignerError> {
+        let mut old = v1::types::CanonicalProposal::decode_length_delimited(old_sign_bytes)?;
+        let mut new = v1::types::CanonicalProposal::decode_length_delimited(new_sign_bytes)?;
+        old.timestamp = None;
+        new.timestamp = None;
+        Ok(old == new)
+    }
+
+    fn vote_sign_bytes_only_differ_by_timestamp(
+        old_sign_bytes: &[u8],
+        new_sign_bytes: &[u8],
+    ) -> Result<bool, SignerError> {
+        let mut old = v1::types::CanonicalVote::decode_length_delimited(old_sign_bytes)?;
+        let mut new = v1::types::CanonicalVote::decode_length_delimited(new_sign_bytes)?;
+        old.timestamp = None;
+        new.timestamp = None;
+        Ok(old == new)
+    }
+
     fn create_double_sign_vote_response(cd: &ConsensusData) -> Self::VoteResponse {
         v1::privval::SignedVoteResponse {
             vote: None,
             error: Some(v1::privval::RemoteSignerError {
                 code: 1,
-                description: format!("Would double-sign vote at height/round/step {}/{}/{:?}", cd.height, cd.round, cd.step),
+                description: format!(
+                    "Vote at height/round/step {}/{}/{:?} has already been signed by another CometBFT node connected to nebula",
+                    cd.height, cd.round, cd.step
+                ),
             }),
         }
     }
@@ -168,7 +189,10 @@ impl ProtocolVersion for VersionV1_0 {
             proposal: None,
             error: Some(v1::privval::RemoteSignerError {
                 code: 1,
-                description: format!("Would double-sign proposal at height/round/step {}/{}/{:?}", cd.height, cd.round, cd.step),
+                description: format!(
+                    "Proposal at height/round/step {}/{}/{:?} has already been signed by another CometBFT node connected to nebula",
+                    cd.height, cd.round, cd.step
+                ),
             }),
         }
     }
@@ -234,8 +258,15 @@ impl ProtocolVersion for VersionV1_0 {
         v1::privval::PingResponse {}
     }
 
-    fn create_error_response(message: &str) -> Response<Self::ProposalResponse, Self::VoteResponse, Self::PubKeyResponse, Self::PingResponse> {
-        Response::SignedProposal(v1::privval::SignedProposalResponse {
+    fn create_error_response(
+        message: &str,
+    ) -> Response<
+        Self::ProposalResponse,
+        Self::VoteResponse,
+        Self::PubKeyResponse,
+        Self::PingResponse,
+    > {
+        Response::Proposal(v1::privval::SignedProposalResponse {
             proposal: None,
             error: Some(v1::privval::RemoteSignerError {
                 code: 1,

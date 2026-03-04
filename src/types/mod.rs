@@ -1,8 +1,9 @@
-use crate::{SignerError, protocol::ValidRequest};
+use crate::error::SignerError;
+use crate::protocol::CheckedRequest;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlockId {
     pub hash: Vec<u8>,
     pub parts: Option<PartSetHeader>,
@@ -25,6 +26,7 @@ impl From<PartSetHeader> for crate::proto::v1::types::PartSetHeader {
         }
     }
 }
+
 impl From<crate::proto::v1::types::BlockId> for BlockId {
     fn from(block_id: crate::proto::v1::types::BlockId) -> BlockId {
         BlockId {
@@ -43,13 +45,13 @@ impl From<crate::proto::v1::types::PartSetHeader> for PartSetHeader {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PartSetHeader {
     pub total: u32,
     pub hash: Vec<u8>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum SignedMsgType {
     #[default]
     Unknown = 0,
@@ -58,7 +60,7 @@ pub enum SignedMsgType {
     Proposal = 32,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Vote {
     pub step: SignedMsgType,
     pub height: i64,
@@ -70,6 +72,7 @@ pub struct Vote {
     pub extension: Vec<u8>,
     pub extension_signature: Vec<u8>,
 }
+
 impl std::fmt::Display for Vote {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -110,7 +113,6 @@ impl From<SignedMsgType> for i32 {
     }
 }
 
-// this is getting messy, probably something wrong with the types somewhere?
 impl From<u8> for SignedMsgType {
     fn from(n: u8) -> Self {
         match n {
@@ -122,7 +124,7 @@ impl From<u8> for SignedMsgType {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Proposal {
     pub step: SignedMsgType,
     pub height: i64,
@@ -148,12 +150,13 @@ pub enum KeyType {
 
 impl TryFrom<&str> for KeyType {
     type Error = SignerError;
+
     fn try_from(key_type_str: &str) -> Result<KeyType, SignerError> {
         match key_type_str {
             "ed25519" => Ok(KeyType::Ed25519),
             "secp256k1" => Ok(KeyType::Secp256k1),
             "bls12_381" => Ok(KeyType::Bls12381),
-            "bls12381" => Ok(KeyType::Bls12381), // TODO
+            "bls12381" => Ok(KeyType::Bls12381),
             _ => Err(SignerError::InvalidData),
         }
     }
@@ -169,25 +172,32 @@ impl From<KeyType> for String {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
 pub struct ConsensusData {
     pub height: i64,
     pub round: i64,
     pub step: SignedMsgType,
+    pub sign_data: Vec<u8>,
+    pub signature: Vec<u8>,
+    pub ext_sign_data: Vec<u8>,
+    pub ext_signature: Vec<u8>,
 }
 
-impl From<&ValidRequest> for ConsensusData {
-    fn from(value: &ValidRequest) -> Self {
+impl From<&CheckedRequest> for ConsensusData {
+    fn from(value: &CheckedRequest) -> Self {
         match value {
-            ValidRequest::Vote(v) => Self {
+            CheckedRequest::Vote(v) => Self {
                 height: v.height,
                 round: v.round,
                 step: v.step,
+                ..Default::default()
             },
-            ValidRequest::Proposal(p) => Self {
+            CheckedRequest::Proposal(p) => Self {
                 height: p.height,
                 round: p.round,
                 step: p.step,
+                ..Default::default()
             },
         }
     }
@@ -198,7 +208,7 @@ impl std::fmt::Display for ConsensusData {
         write!(
             f,
             "ConsensusData {}/{}/{:?}",
-            self.height, self.round, self.step
+            self.height, self.round, self.step,
         )
     }
 }
@@ -215,8 +225,9 @@ impl ConsensusData {
         let json = std::fs::read_to_string(path).ok()?;
         serde_json::from_str(&json).ok()
     }
-    pub fn to_bytes(self) -> Vec<u8> {
-        serde_json::to_vec(&self).unwrap()
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        serde_json::to_vec(self).unwrap()
     }
 
     pub fn from_bytes(buf: &[u8]) -> Option<ConsensusData> {

@@ -37,6 +37,20 @@ impl ProtocolVersion for VersionV0_37 {
         todo!("0.37")
     }
 
+    fn proposal_sign_bytes_only_differ_by_timestamp(
+        _old_sign_bytes: &[u8],
+        _new_sign_bytes: &[u8],
+    ) -> Result<bool, SignerError> {
+        todo!("0.37")
+    }
+
+    fn vote_sign_bytes_only_differ_by_timestamp(
+        _old_sign_bytes: &[u8],
+        _new_sign_bytes: &[u8],
+    ) -> Result<bool, SignerError> {
+        todo!("0.37")
+    }
+
     fn create_double_sign_vote_response(_cd: &ConsensusData) -> Self::VoteResponse {
         todo!()
     }
@@ -68,7 +82,14 @@ impl ProtocolVersion for VersionV0_37 {
         todo!()
     }
 
-    fn create_error_response(_message: &str) -> Response<Self::ProposalResponse, Self::VoteResponse, Self::PubKeyResponse, Self::PingResponse> {
+    fn create_error_response(
+        _message: &str,
+    ) -> Response<
+        Self::ProposalResponse,
+        Self::VoteResponse,
+        Self::PubKeyResponse,
+        Self::PingResponse,
+    > {
         todo!()
     }
 
