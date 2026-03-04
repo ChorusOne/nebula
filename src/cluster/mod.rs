@@ -306,12 +306,24 @@ fn start_raft_thread(
     raft_state: Arc<RwLock<(StateRole, u64)>>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
+        let initial_state = storage.initial_state().unwrap();
+        let persisted_commit = initial_state.hard_state.get_commit();
+        let persisted_applied = storage.applied_index().unwrap();
+        let applied_index = persisted_applied.min(persisted_commit);
+        if persisted_applied > persisted_commit {
+            warn!(
+                "persisted applied index {} is ahead of persisted commit {}; clamping restart applied to {}",
+                persisted_applied, persisted_commit, applied_index
+            );
+        }
+
         let raft_cfg = RaftCoreConfig {
             id: node_id,
             election_tick: 10,
             check_quorum: true,
             pre_vote: true,
             heartbeat_tick: 3,
+            applied: applied_index,
             ..Default::default()
         };
         raft_cfg.validate().unwrap();
@@ -438,6 +450,13 @@ fn on_ready(
 
     let mut light_rd = raft_group.advance(ready);
 
+    if let Some(commit_index) = light_rd.commit_index() {
+        raft_group
+            .mut_store()
+            .set_commit_index(commit_index)
+            .unwrap();
+    }
+
     for msg in light_rd.take_messages() {
         let _ = net_tx.send(msg);
     }
@@ -460,7 +479,9 @@ fn handle_committed_entries(
     signer_state: &Arc<RwLock<ConsensusData>>,
     proposal_callbacks: &mut VecDeque<Sender<Result<(), SignerError>>>,
 ) {
+    let mut last_applied = None;
     for ent in committed_entries {
+        last_applied = Some(ent.get_index());
         match ent.get_entry_type() {
             EntryType::EntryNormal => {
                 if !ent.get_data().is_empty() {
@@ -493,6 +514,10 @@ fn handle_committed_entries(
                 warn!("unhandled EntryConfChangeV2");
             }
         }
+    }
+
+    if let Some(index) = last_applied {
+        raft_group.mut_store().set_applied_index(index).unwrap();
     }
 }
 

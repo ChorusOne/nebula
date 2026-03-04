@@ -10,6 +10,7 @@ const KEY_HARD_STATE: &[u8] = b"hard_state";
 const KEY_CONF_STATE: &[u8] = b"conf_state";
 const KEY_LAST_INDEX: &[u8] = b"last_index";
 const KEY_SIGNER_STATE: &[u8] = b"state_machine";
+const KEY_APPLIED_INDEX: &[u8] = b"applied_index";
 
 fn entry_key(index: u64) -> Vec<u8> {
     format!("entry:{}", index).into_bytes()
@@ -89,6 +90,36 @@ impl RocksDBStorage {
             .map_err(|e| RaftError::Store(StorageError::Other(Box::new(e))))
     }
 
+    pub fn set_commit_index(&mut self, commit: u64) -> raft::Result<()> {
+        let current = self.initial_state()?.hard_state;
+        if commit <= current.get_commit() {
+            return Ok(());
+        }
+
+        let mut hs = current;
+        hs.set_commit(commit);
+        self.set_hard_state(hs)
+    }
+
+    pub fn applied_index(&self) -> raft::Result<u64> {
+        match self
+            .db
+            .get(KEY_APPLIED_INDEX)
+            .map_err(|e| RaftError::Store(StorageError::Other(Box::new(e))))?
+        {
+            Some(bytes) => Ok(u64::from_be_bytes(bytes.try_into().unwrap_or_default())),
+            None => Ok(0),
+        }
+    }
+
+    pub fn set_applied_index(&mut self, index: u64) -> raft::Result<()> {
+        let mut opts = rocksdb::WriteOptions::default();
+        opts.set_sync(true);
+        self.db
+            .put_opt(KEY_APPLIED_INDEX, index.to_be_bytes(), &opts)
+            .map_err(|e| RaftError::Store(StorageError::Other(Box::new(e))))
+    }
+
     pub fn apply_snapshot(&mut self, snapshot: Snapshot) -> raft::Result<()> {
         let mut opts = rocksdb::WriteOptions::default();
         opts.set_sync(true);
@@ -110,11 +141,55 @@ impl RocksDBStorage {
         hs.set_term(term);
         hs.set_commit(index);
         self.set_hard_state(hs)?;
+        self.set_applied_index(index)?;
 
         self.db
             .put_opt(KEY_LAST_INDEX, index.to_be_bytes(), &opts)
             .map_err(|e| RaftError::Store(StorageError::Other(Box::new(e))))?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn applied_index_roundtrip() {
+        let dir = TempDir::new().unwrap();
+        let mut storage = RocksDBStorage::new(dir.path());
+        assert_eq!(storage.applied_index().unwrap(), 0);
+
+        storage.set_applied_index(42).unwrap();
+        drop(storage);
+
+        let reopened = RocksDBStorage::new(dir.path());
+        assert_eq!(reopened.applied_index().unwrap(), 42);
+    }
+
+    #[test]
+    fn commit_index_is_persisted() {
+        let dir = TempDir::new().unwrap();
+        let mut storage = RocksDBStorage::new(dir.path());
+
+        storage.set_commit_index(7).unwrap();
+        let hs = storage.initial_state().unwrap().hard_state;
+        assert_eq!(hs.get_commit(), 7);
+    }
+
+    #[test]
+    fn applying_snapshot_updates_applied_index() {
+        let dir = TempDir::new().unwrap();
+        let mut storage = RocksDBStorage::new(dir.path());
+
+        let mut snapshot = Snapshot::default();
+        snapshot.mut_metadata().set_index(5);
+        snapshot.mut_metadata().set_term(2);
+
+        storage.apply_snapshot(snapshot).unwrap();
+        assert_eq!(storage.applied_index().unwrap(), 5);
+        assert_eq!(storage.initial_state().unwrap().hard_state.get_commit(), 5);
     }
 }
 
