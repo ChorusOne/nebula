@@ -20,6 +20,7 @@ use config::{Config, PersistConfig, ProtocolVersionConfig};
 use log::{LevelFilter, debug, error, info, warn};
 use persist::{Persist, PersistVariants};
 use protocol::{CheckedProposalRequest, CheckedVoteRequest, Request, ValidRequest};
+use sha2::{Digest, Sha256};
 use signer::Signer;
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -206,6 +207,31 @@ enum RequestProcessingAction<V: ProtocolVersion> {
     ShowPublicKey,
 }
 
+fn sign_bytes_hash(bytes: &[u8]) -> Vec<u8> {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hasher.finalize().to_vec()
+}
+
+fn proposal_response_from_signature<V: ProtocolVersion>(
+    proposal: &types::Proposal,
+    signature: Vec<u8>,
+) -> Response<V::ProposalResponse, V::VoteResponse, V::PubKeyResponse, V::PingResponse> {
+    Response::SignedProposal(V::create_proposal_response(proposal, signature))
+}
+
+fn vote_response_from_signature<V: ProtocolVersion>(
+    vote: &types::Vote,
+    signature: Vec<u8>,
+    extension_signature: Option<Vec<u8>>,
+) -> Response<V::ProposalResponse, V::VoteResponse, V::PubKeyResponse, V::PingResponse> {
+    Response::SignedVote(V::create_vote_response(
+        vote,
+        signature,
+        extension_signature,
+    ))
+}
+
 fn process_request<T: SigningBackend, V: ProtocolVersion>(
     request: Request,
     consensus_state: &ConsensusData,
@@ -245,21 +271,137 @@ pub fn handle_single_request<T: SigningBackend, V: ProtocolVersion, C: Read + Wr
     debug!("Request: {request:?}");
     let start = std::time::Instant::now();
     let mut guard = persist.lock().unwrap();
-    let consensus_state = guard.state();
+    let response = match (&mut *guard, request) {
+        (PersistVariants::Raft(raft_node), Request::Proposal(proposal)) => {
+            let signable = V::proposal_to_bytes(&proposal, signer.chain_id())?;
+            let mut request_state = ConsensusData::from(&ValidRequest::Proposal(proposal.clone()));
+            request_state.sign_bytes_hash = sign_bytes_hash(&signable);
 
-    let action = process_request::<T, V>(request, &consensus_state);
-    let response = match action {
-        RequestProcessingAction::PersistAndSign { request } => match guard.persist(request) {
-            Err(e) => {
-                error!("Could not persist state: {e:?}");
-                V::create_error_response(&format!("Cannot persist new consensus state: {e:?}"))
+            match raft_node.cached_signature_lookup(&request_state) {
+                types::SignatureCacheLookup::Hit(cached) => {
+                    proposal_response_from_signature::<V>(&proposal, cached.signature)
+                }
+                types::SignatureCacheLookup::Conflict(_) => {
+                    Response::SignedProposal(V::create_double_sign_prop_response(&request_state))
+                }
+                types::SignatureCacheLookup::Miss => {
+                    let consensus_state = raft_node.signer_state.read().unwrap().clone();
+                    match proposal.clone().check(&consensus_state) {
+                        CheckedProposalRequest::DoubleSignProposal(cd) => {
+                            Response::SignedProposal(V::create_double_sign_prop_response(&cd))
+                        }
+                        CheckedProposalRequest::ValidRequest(valid) => {
+                            let (signature, _) = signer.sign_request(&valid)?;
+                            request_state.signature = signature.clone();
+
+                            match raft_node.replicate_state(&request_state) {
+                                Ok(()) => match raft_node.cached_signature_lookup(&request_state) {
+                                    types::SignatureCacheLookup::Hit(cached) => {
+                                        proposal_response_from_signature::<V>(
+                                            &proposal,
+                                            cached.signature,
+                                        )
+                                    }
+                                    _ => proposal_response_from_signature::<V>(&proposal, signature),
+                                },
+                                Err(e) => {
+                                    error!("Could not persist state: {e:?}");
+                                    V::create_error_response(&format!(
+                                        "Cannot persist new consensus state: {e:?}"
+                                    ))
+                                }
+                            }
+                        }
+                    }
+                }
             }
-            Ok(persisted) => signer.sign(persisted)?,
-        },
-        RequestProcessingAction::ReplyWith(response) => response,
-        RequestProcessingAction::ShowPublicKey => {
-            let public_key = signer.public_key()?;
-            Response::PublicKey(V::create_pub_key_response(&public_key))
+        }
+        (PersistVariants::Raft(raft_node), Request::Vote(vote)) => {
+            let signable = V::vote_to_bytes(&vote, signer.chain_id())?;
+            let mut request_state = ConsensusData::from(&ValidRequest::Vote(vote.clone()));
+            request_state.sign_bytes_hash = sign_bytes_hash(&signable);
+
+            match raft_node.cached_signature_lookup(&request_state) {
+                types::SignatureCacheLookup::Hit(cached) => vote_response_from_signature::<V>(
+                    &vote,
+                    cached.signature,
+                    (!cached.extension_signature.is_empty()).then_some(cached.extension_signature),
+                ),
+                types::SignatureCacheLookup::Conflict(_) => {
+                    Response::SignedVote(V::create_double_sign_vote_response(&request_state))
+                }
+                types::SignatureCacheLookup::Miss => {
+                    let consensus_state = raft_node.signer_state.read().unwrap().clone();
+                    match vote.clone().check(&consensus_state) {
+                        CheckedVoteRequest::DoubleSignVote(cd) => {
+                            Response::SignedVote(V::create_double_sign_vote_response(&cd))
+                        }
+                        CheckedVoteRequest::ValidRequest(valid) => {
+                            let (signature, extension_signature) = signer.sign_request(&valid)?;
+                            request_state.signature = signature.clone();
+                            request_state.extension_signature =
+                                extension_signature.clone().unwrap_or_default();
+
+                            match raft_node.replicate_state(&request_state) {
+                                Ok(()) => match raft_node.cached_signature_lookup(&request_state) {
+                                    types::SignatureCacheLookup::Hit(cached) => {
+                                        vote_response_from_signature::<V>(
+                                            &vote,
+                                            cached.signature,
+                                            (!cached.extension_signature.is_empty())
+                                                .then_some(cached.extension_signature),
+                                        )
+                                    }
+                                    _ => vote_response_from_signature::<V>(
+                                        &vote,
+                                        signature,
+                                        extension_signature,
+                                    ),
+                                },
+                                Err(e) => {
+                                    error!("Could not persist state: {e:?}");
+                                    V::create_error_response(&format!(
+                                        "Cannot persist new consensus state: {e:?}"
+                                    ))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        (_, request) => {
+            let consensus_state = guard.state();
+            let action = process_request::<T, V>(request, &consensus_state);
+            match action {
+                RequestProcessingAction::PersistAndSign { request } => match guard.persist(request)
+                {
+                    Err(e) => {
+                        error!("Could not persist state: {e:?}");
+                        V::create_error_response(&format!(
+                            "Cannot persist new consensus state: {e:?}"
+                        ))
+                    }
+                    Ok(persisted) => {
+                        let (signature, extension_signature) = signer.sign_request(&persisted.0)?;
+                        match persisted.0 {
+                            ValidRequest::Proposal(proposal) => {
+                                proposal_response_from_signature::<V>(&proposal, signature)
+                            }
+                            ValidRequest::Vote(vote) => vote_response_from_signature::<V>(
+                                &vote,
+                                signature,
+                                extension_signature,
+                            ),
+                        }
+                    }
+                },
+                RequestProcessingAction::ReplyWith(response) => response,
+                RequestProcessingAction::ShowPublicKey => {
+                    let public_key = signer.public_key()?;
+                    Response::PublicKey(V::create_pub_key_response(&public_key))
+                }
+            }
         }
     };
 

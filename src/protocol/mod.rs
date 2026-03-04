@@ -19,6 +19,7 @@ pub enum CheckedProposalRequest {
     ValidRequest(ValidRequest),
 }
 
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub enum ValidRequest {
     Proposal(Proposal),
     Vote(Vote),
@@ -58,6 +59,7 @@ impl Vote {
             height: self.height,
             round: self.round,
             step: self.step,
+            ..Default::default()
         };
         if should_sign_vote(state, &self) {
             CheckedVoteRequest::ValidRequest(ValidRequest::Vote(self))
@@ -72,6 +74,7 @@ impl Proposal {
             height: self.height,
             round: self.round,
             step: self.step,
+            ..Default::default()
         };
         if should_sign_proposal(state, &self) {
             CheckedProposalRequest::ValidRequest(ValidRequest::Proposal(self))
@@ -188,6 +191,7 @@ fn should_sign_proposal_logic() {
         height: 10,
         round: 1,
         step: SignedMsgType::Proposal,
+        ..Default::default()
     };
 
     let p1 = Proposal {
@@ -239,6 +243,7 @@ fn should_sign_vote_logic() {
         height: 10,
         round: 1,
         step: SignedMsgType::Proposal,
+        ..Default::default()
     };
     let block_id = Some(crate::types::BlockId {
         hash: vec![1],
@@ -285,6 +290,7 @@ fn should_sign_vote_logic() {
         height: 10,
         round: 1,
         step: SignedMsgType::Prevote,
+        ..Default::default()
     };
     assert!(should_sign_vote(&state_after_prevote, &v4));
 
@@ -292,6 +298,7 @@ fn should_sign_vote_logic() {
         height: 10,
         round: 1,
         step: SignedMsgType::Precommit,
+        ..Default::default()
     };
     assert!(!should_sign_vote(&state_after_precommit, &v4));
 
@@ -312,6 +319,7 @@ fn test_step_transition_proposal() {
         height: 10,
         round: 1,
         step: SignedMsgType::Proposal,
+        ..Default::default()
     };
     assert_eq!(valid_step_transition(&state, SignedMsgType::Prevote), true);
     // moving to pre-commit is always valid from non-precommit states
@@ -332,6 +340,7 @@ fn test_step_transition_precommit() {
         height: 10,
         round: 1,
         step: SignedMsgType::Precommit,
+        ..Default::default()
     };
     // moving from pre-commit is never allowed
     assert_eq!(
@@ -352,6 +361,7 @@ fn test_step_transition_unknown() {
         height: 10,
         round: 1,
         step: SignedMsgType::Unknown,
+        ..Default::default()
     };
     // can only transition to precommit
     assert_eq!(
@@ -372,6 +382,7 @@ fn test_step_transition_prevote() {
         height: 10,
         round: 1,
         step: SignedMsgType::Prevote,
+        ..Default::default()
     };
     assert_eq!(
         valid_step_transition(&state, SignedMsgType::Precommit),

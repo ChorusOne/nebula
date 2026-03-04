@@ -58,7 +58,7 @@ impl Persist for LocalState {
     }
 
     fn state(&self) -> ConsensusData {
-        self.state
+        self.state.clone()
     }
 }
 
@@ -74,6 +74,6 @@ impl Persist for SignerRaftNode {
         Ok(PersistedRequest(request))
     }
     fn state(&self) -> ConsensusData {
-        *self.signer_state.read().unwrap()
+        self.signer_state.read().unwrap().clone()
     }
 }

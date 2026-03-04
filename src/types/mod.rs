@@ -1,8 +1,9 @@
 use crate::{SignerError, protocol::ValidRequest};
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, VecDeque};
 use thiserror::Error;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlockId {
     pub hash: Vec<u8>,
     pub parts: Option<PartSetHeader>,
@@ -43,13 +44,13 @@ impl From<crate::proto::v1::types::PartSetHeader> for PartSetHeader {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PartSetHeader {
     pub total: u32,
     pub hash: Vec<u8>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum SignedMsgType {
     #[default]
     Unknown = 0,
@@ -58,7 +59,7 @@ pub enum SignedMsgType {
     Proposal = 32,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Vote {
     pub step: SignedMsgType,
     pub height: i64,
@@ -122,7 +123,7 @@ impl From<u8> for SignedMsgType {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Proposal {
     pub step: SignedMsgType,
     pub height: i64,
@@ -169,11 +170,17 @@ impl From<KeyType> for String {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct ConsensusData {
     pub height: i64,
     pub round: i64,
     pub step: SignedMsgType,
+    #[serde(default)]
+    pub sign_bytes_hash: Vec<u8>,
+    #[serde(default)]
+    pub signature: Vec<u8>,
+    #[serde(default)]
+    pub extension_signature: Vec<u8>,
 }
 
 impl From<&ValidRequest> for ConsensusData {
@@ -183,11 +190,13 @@ impl From<&ValidRequest> for ConsensusData {
                 height: v.height,
                 round: v.round,
                 step: v.step,
+                ..Default::default()
             },
             ValidRequest::Proposal(p) => Self {
                 height: p.height,
                 round: p.round,
                 step: p.step,
+                ..Default::default()
             },
         }
     }
@@ -215,11 +224,173 @@ impl ConsensusData {
         let json = std::fs::read_to_string(path).ok()?;
         serde_json::from_str(&json).ok()
     }
-    pub fn to_bytes(self) -> Vec<u8> {
+    pub fn to_bytes(&self) -> Vec<u8> {
         serde_json::to_vec(&self).unwrap()
     }
 
     pub fn from_bytes(buf: &[u8]) -> Option<ConsensusData> {
         serde_json::from_slice(buf).ok()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct SignatureSlot {
+    pub height: i64,
+    pub round: i64,
+    pub step: SignedMsgType,
+}
+
+impl From<&ConsensusData> for SignatureSlot {
+    fn from(value: &ConsensusData) -> Self {
+        Self {
+            height: value.height,
+            round: value.round,
+            step: value.step,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum SignatureCacheLookup {
+    Hit(ConsensusData),
+    Conflict(ConsensusData),
+    Miss,
+}
+
+#[derive(Clone, Debug)]
+pub struct SignatureCache {
+    capacity: usize,
+    by_hash: HashMap<Vec<u8>, ConsensusData>,
+    by_slot: HashMap<SignatureSlot, Vec<u8>>,
+    order: VecDeque<Vec<u8>>,
+}
+
+impl Default for SignatureCache {
+    fn default() -> Self {
+        Self::new(100)
+    }
+}
+
+impl SignatureCache {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            capacity: capacity.max(1),
+            by_hash: HashMap::new(),
+            by_slot: HashMap::new(),
+            order: VecDeque::new(),
+        }
+    }
+
+    pub fn insert(&mut self, record: ConsensusData) {
+        if record.sign_bytes_hash.is_empty() || record.signature.is_empty() {
+            return;
+        }
+
+        let hash = record.sign_bytes_hash.clone();
+        let slot = SignatureSlot::from(&record);
+        self.by_slot.insert(slot, hash.clone());
+        self.by_hash.insert(hash.clone(), record);
+        self.order.push_back(hash);
+
+        while self.order.len() > self.capacity {
+            if let Some(old_hash) = self.order.pop_front() {
+                if let Some(existing) = self.by_hash.remove(&old_hash) {
+                    let existing_slot = SignatureSlot::from(&existing);
+                    if self
+                        .by_slot
+                        .get(&existing_slot)
+                        .is_some_and(|h| h == &old_hash)
+                    {
+                        self.by_slot.remove(&existing_slot);
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn lookup(&self, record: &ConsensusData) -> SignatureCacheLookup {
+        let slot = SignatureSlot::from(record);
+        match self.by_slot.get(&slot) {
+            Some(existing_hash) if existing_hash == &record.sign_bytes_hash => self
+                .by_hash
+                .get(existing_hash)
+                .cloned()
+                .map(SignatureCacheLookup::Hit)
+                .unwrap_or(SignatureCacheLookup::Miss),
+            Some(existing_hash) => self
+                .by_hash
+                .get(existing_hash)
+                .cloned()
+                .map(SignatureCacheLookup::Conflict)
+                .unwrap_or(SignatureCacheLookup::Miss),
+            None => SignatureCacheLookup::Miss,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn record(height: i64, round: i64, step: SignedMsgType, hash: u8) -> ConsensusData {
+        ConsensusData {
+            height,
+            round,
+            step,
+            sign_bytes_hash: vec![hash],
+            signature: vec![hash, hash],
+            extension_signature: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn signature_cache_hit_and_conflict() {
+        let mut cache = SignatureCache::new(100);
+        let first = record(10, 0, SignedMsgType::Proposal, 1);
+        cache.insert(first.clone());
+
+        match cache.lookup(&first) {
+            SignatureCacheLookup::Hit(found) => assert_eq!(found.signature, first.signature),
+            _ => panic!("expected cache hit"),
+        }
+
+        let conflict = record(10, 0, SignedMsgType::Proposal, 2);
+        match cache.lookup(&conflict) {
+            SignatureCacheLookup::Conflict(found) => {
+                assert_eq!(found.sign_bytes_hash, first.sign_bytes_hash)
+            }
+            _ => panic!("expected conflict"),
+        }
+
+        let miss = record(11, 0, SignedMsgType::Proposal, 3);
+        match cache.lookup(&miss) {
+            SignatureCacheLookup::Miss => {}
+            _ => panic!("expected miss"),
+        }
+    }
+
+    #[test]
+    fn signature_cache_honors_capacity() {
+        let mut cache = SignatureCache::new(2);
+        let first = record(1, 0, SignedMsgType::Proposal, 1);
+        let second = record(2, 0, SignedMsgType::Proposal, 2);
+        let third = record(3, 0, SignedMsgType::Proposal, 3);
+
+        cache.insert(first.clone());
+        cache.insert(second.clone());
+        cache.insert(third.clone());
+
+        match cache.lookup(&first) {
+            SignatureCacheLookup::Miss => {}
+            _ => panic!("oldest entry should be evicted"),
+        }
+        match cache.lookup(&second) {
+            SignatureCacheLookup::Hit(_) => {}
+            _ => panic!("second entry should still exist"),
+        }
+        match cache.lookup(&third) {
+            SignatureCacheLookup::Hit(_) => {}
+            _ => panic!("third entry should still exist"),
+        }
     }
 }

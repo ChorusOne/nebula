@@ -67,6 +67,7 @@ fn single_node_cluster() {
         height: 100,
         round: 1,
         step: SignedMsgType::Proposal,
+        ..Default::default()
     };
 
     let result = cluster.replicate_state(&new_state);
@@ -123,6 +124,7 @@ fn three_node_cluster_basic() {
         height: 200,
         round: 2,
         step: SignedMsgType::Prevote,
+        ..Default::default()
     };
 
     let result = leader.replicate_state(&new_state);

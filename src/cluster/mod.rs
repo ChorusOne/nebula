@@ -3,7 +3,7 @@ mod storage;
 use crate::cluster::storage::RocksDBStorage;
 use crate::config::RaftConfig;
 use crate::error::SignerError;
-use crate::types::ConsensusData;
+use crate::types::{ConsensusData, SignatureCache, SignatureCacheLookup, SignedMsgType};
 use log::{info, warn};
 use protobuf::Message as ProtobufMessage;
 use raft::prelude::{ConfState, EntryType, Message as RaftProtoMessage, Snapshot};
@@ -32,6 +32,7 @@ pub struct SignerRaftNode {
     pub signer_state: Arc<RwLock<ConsensusData>>,
     proposal_sender: Sender<RaftMessage>,
     raft_state: Arc<RwLock<(StateRole, u64)>>,
+    signature_cache: Arc<RwLock<SignatureCache>>,
     #[allow(dead_code)]
     shutdown_handle: Arc<RwLock<Option<thread::JoinHandle<()>>>>,
 }
@@ -58,6 +59,12 @@ impl SignerRaftNode {
         let logger = stdlog_to_slog();
         let storage = create_storage(&config);
         let signer_state = Arc::new(RwLock::new(storage.read_signer_state().unwrap()));
+        let mut signature_cache = SignatureCache::new(100);
+        for record in storage.recent_consensus_records(100).unwrap_or_default() {
+            signature_cache.insert(record);
+        }
+        signature_cache.insert(signer_state.read().unwrap().clone());
+        let signature_cache = Arc::new(RwLock::new(signature_cache));
 
         let (in_tx, in_rx) = mpsc::channel::<RaftMessage>();
         let (out_tx, out_rx) = mpsc::channel::<RaftProtoMessage>();
@@ -74,6 +81,7 @@ impl SignerRaftNode {
             out_tx,
             Arc::clone(&signer_state),
             Arc::clone(&raft_state),
+            Arc::clone(&signature_cache),
         );
 
         SignerRaftNode {
@@ -81,6 +89,7 @@ impl SignerRaftNode {
             proposal_sender: in_tx,
             raft_state,
             node_id: config.node_id,
+            signature_cache,
             shutdown_handle: Arc::new(RwLock::new(Some(handle))),
         }
     }
@@ -97,7 +106,7 @@ impl SignerRaftNode {
 
         let (tx, rx) = mpsc::channel();
         self.proposal_sender
-            .send(RaftMessage::Propose(*new_state, tx))
+            .send(RaftMessage::Propose(new_state.clone(), tx))
             .map_err(|e| {
                 SignerError::Other(format!("Failed to send proposal to raft thread: {}", e))
             })?;
@@ -118,6 +127,10 @@ impl SignerRaftNode {
                 ))
             }
         }
+    }
+
+    pub fn cached_signature_lookup(&self, request_state: &ConsensusData) -> SignatureCacheLookup {
+        self.signature_cache.read().unwrap().lookup(request_state)
     }
 
     pub fn is_leader(&self) -> bool {
@@ -304,6 +317,7 @@ fn start_raft_thread(
     out_tx: Sender<RaftProtoMessage>,
     signer_state: Arc<RwLock<ConsensusData>>,
     raft_state: Arc<RwLock<(StateRole, u64)>>,
+    signature_cache: Arc<RwLock<SignatureCache>>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let initial_state = storage.initial_state().unwrap();
@@ -370,6 +384,7 @@ fn start_raft_thread(
                 &signer_state,
                 &out_tx,
                 &raft_state,
+                &signature_cache,
                 &mut proposal_callbacks,
             );
         }
@@ -381,6 +396,7 @@ fn on_ready(
     signer_state: &Arc<RwLock<ConsensusData>>,
     net_tx: &Sender<RaftProtoMessage>,
     raft_state: &Arc<RwLock<(StateRole, u64)>>,
+    signature_cache: &Arc<RwLock<SignatureCache>>,
     proposal_callbacks: &mut VecDeque<Sender<Result<(), SignerError>>>,
 ) {
     if !raft_group.has_ready() {
@@ -422,6 +438,7 @@ fn on_ready(
             info!("loaded state machine from snapshot: {:?}", sm_data);
             *signer_state.write().unwrap() = sm_data;
         }
+        rebuild_signature_cache(raft_group.mut_store(), signature_cache);
     }
 
     if !ready.entries().is_empty() {
@@ -444,6 +461,7 @@ fn on_ready(
             raft_group,
             ready.take_committed_entries(),
             signer_state,
+            signature_cache,
             proposal_callbacks,
         );
     }
@@ -466,6 +484,7 @@ fn on_ready(
             raft_group,
             light_rd.take_committed_entries(),
             signer_state,
+            signature_cache,
             proposal_callbacks,
         );
     }
@@ -477,6 +496,7 @@ fn handle_committed_entries(
     raft_group: &mut RawNode<RocksDBStorage>,
     committed_entries: Vec<raft_proto::eraftpb::Entry>,
     signer_state: &Arc<RwLock<ConsensusData>>,
+    signature_cache: &Arc<RwLock<SignatureCache>>,
     proposal_callbacks: &mut VecDeque<Sender<Result<(), SignerError>>>,
 ) {
     let mut last_applied = None;
@@ -486,17 +506,11 @@ fn handle_committed_entries(
             EntryType::EntryNormal => {
                 if !ent.get_data().is_empty() {
                     if let Some(ns) = ConsensusData::from_bytes(ent.get_data()) {
-                        info!(
-                            "applying normal entry received from master: {}, current node state: {}, node_id: {}",
-                            ns,
-                            signer_state.read().unwrap(),
-                            raft_group.raft.id,
-                        );
-                        *signer_state.write().unwrap() = ns;
-                        raft_group.mut_store().write_signer_state(&ns).unwrap();
+                        let apply_res =
+                            apply_consensus_record(raft_group, signer_state, signature_cache, ns);
 
                         if let Some(callback) = proposal_callbacks.pop_front() {
-                            if let Err(e) = callback.send(Ok(())) {
+                            if let Err(e) = callback.send(apply_res) {
                                 warn!("failed to send commit confirmation: {:?}", e);
                             }
                         }
@@ -519,6 +533,100 @@ fn handle_committed_entries(
     if let Some(index) = last_applied {
         raft_group.mut_store().set_applied_index(index).unwrap();
     }
+}
+
+fn apply_consensus_record(
+    raft_group: &mut RawNode<RocksDBStorage>,
+    signer_state: &Arc<RwLock<ConsensusData>>,
+    signature_cache: &Arc<RwLock<SignatureCache>>,
+    next: ConsensusData,
+) -> Result<(), SignerError> {
+    if !next.sign_bytes_hash.is_empty() {
+        match signature_cache.read().unwrap().lookup(&next) {
+            SignatureCacheLookup::Hit(existing) => {
+                info!(
+                    "idempotent replay of signed entry at {}/{}/{:?} on node {}",
+                    existing.height, existing.round, existing.step, raft_group.raft.id
+                );
+                return Ok(());
+            }
+            SignatureCacheLookup::Conflict(existing) => {
+                return Err(SignerError::Other(format!(
+                    "Would double-sign at height/round/step {}/{}/{:?}; existing hash {}, new hash {}",
+                    next.height,
+                    next.round,
+                    next.step,
+                    hex::encode(existing.sign_bytes_hash),
+                    hex::encode(next.sign_bytes_hash)
+                )));
+            }
+            SignatureCacheLookup::Miss => {}
+        }
+    }
+
+    let current = signer_state.read().unwrap().clone();
+    if !is_valid_transition(&current, &next) {
+        return Err(SignerError::Other(format!(
+            "Would double-sign at height/round/step {}/{}/{:?}",
+            next.height, next.round, next.step
+        )));
+    }
+
+    info!(
+        "applying normal entry received from master: {}, current node state: {}, node_id: {}",
+        next, current, raft_group.raft.id,
+    );
+    *signer_state.write().unwrap() = next.clone();
+    raft_group.mut_store().write_signer_state(&next).unwrap();
+    signature_cache.write().unwrap().insert(next);
+
+    Ok(())
+}
+
+fn is_valid_transition(current: &ConsensusData, next: &ConsensusData) -> bool {
+    match next.step {
+        SignedMsgType::Proposal => {
+            if next.height > current.height {
+                return true;
+            }
+            next.height == current.height && next.round > current.round
+        }
+        SignedMsgType::Prevote | SignedMsgType::Precommit => {
+            if next.height > current.height {
+                return true;
+            }
+            if next.height < current.height {
+                return false;
+            }
+            if next.round > current.round {
+                return true;
+            }
+            if next.round < current.round {
+                return false;
+            }
+
+            if current.step == SignedMsgType::Proposal && next.step == SignedMsgType::Prevote {
+                return true;
+            }
+            if current.step != SignedMsgType::Precommit && next.step == SignedMsgType::Precommit {
+                return true;
+            }
+            false
+        }
+        SignedMsgType::Unknown => false,
+    }
+}
+
+fn rebuild_signature_cache(
+    storage: &RocksDBStorage,
+    signature_cache: &Arc<RwLock<SignatureCache>>,
+) {
+    let mut rebuilt = SignatureCache::new(100);
+    for record in storage.recent_consensus_records(100).unwrap_or_default() {
+        rebuilt.insert(record);
+    }
+    rebuilt.insert(storage.read_signer_state().unwrap_or_default());
+    *signature_cache.write().unwrap() = rebuilt;
 }
 
 #[cfg(test)]

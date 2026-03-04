@@ -37,6 +37,7 @@ fn signer_with_mock_connection() {
         height: 0,
         round: 0,
         step: 0.into(),
+        ..Default::default()
     };
 
     let cd_path = "asd";

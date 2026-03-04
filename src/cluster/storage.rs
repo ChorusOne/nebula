@@ -148,11 +148,51 @@ impl RocksDBStorage {
             .map_err(|e| RaftError::Store(StorageError::Other(Box::new(e))))?;
         Ok(())
     }
+
+    pub fn recent_consensus_records(&self, limit: usize) -> raft::Result<Vec<ConsensusData>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let first = self.first_index()?;
+        let last = self.last_index()?;
+        if last < first {
+            return Ok(Vec::new());
+        }
+
+        let mut records = Vec::new();
+        let mut start = last.saturating_add(1).saturating_sub(limit as u64);
+        if start < first {
+            start = first;
+        }
+
+        for index in start..=last {
+            let Some(bytes) = self
+                .db
+                .get(entry_key(index))
+                .map_err(|e| RaftError::Store(StorageError::Other(Box::new(e))))?
+            else {
+                continue;
+            };
+
+            let entry = Entry::parse_from_bytes(&bytes)
+                .map_err(|e| RaftError::Store(StorageError::Other(Box::new(e))))?;
+            if entry.get_entry_type() != EntryType::EntryNormal || entry.get_data().is_empty() {
+                continue;
+            }
+
+            if let Some(record) = ConsensusData::from_bytes(entry.get_data()) {
+                records.push(record);
+            }
+        }
+
+        Ok(records)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::SignedMsgType;
     use tempfile::TempDir;
 
     #[test]
@@ -190,6 +230,43 @@ mod tests {
         storage.apply_snapshot(snapshot).unwrap();
         assert_eq!(storage.applied_index().unwrap(), 5);
         assert_eq!(storage.initial_state().unwrap().hard_state.get_commit(), 5);
+    }
+
+    #[test]
+    fn recent_consensus_records_returns_last_normal_entries() {
+        let dir = TempDir::new().unwrap();
+        let mut storage = RocksDBStorage::new(dir.path());
+
+        let mut hs = HardState::default();
+        hs.set_commit(1);
+        hs.set_term(1);
+        storage.set_hard_state(hs).unwrap();
+
+        let mut records = Vec::new();
+        for i in 2..=8 {
+            let record = ConsensusData {
+                height: i as i64,
+                round: 0,
+                step: SignedMsgType::Proposal,
+                sign_bytes_hash: vec![i as u8],
+                signature: vec![i as u8, i as u8],
+                extension_signature: Vec::new(),
+            };
+            records.push(record.clone());
+
+            let mut entry = Entry::default();
+            entry.set_index(i);
+            entry.set_term(1);
+            entry.set_entry_type(EntryType::EntryNormal);
+            entry.set_data(record.to_bytes().into());
+            storage.append_entries(&[entry]).unwrap();
+        }
+
+        let recent = storage.recent_consensus_records(3).unwrap();
+        assert_eq!(recent.len(), 3);
+        assert_eq!(recent[0].height, 6);
+        assert_eq!(recent[1].height, 7);
+        assert_eq!(recent[2].height, 8);
     }
 }
 

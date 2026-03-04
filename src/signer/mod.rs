@@ -3,7 +3,6 @@ use crate::backend::SigningBackend;
 use crate::config::Config;
 use crate::connection::open_secret_connection;
 use crate::error::SignerError;
-use crate::persist::PersistedRequest;
 use crate::protocol::{Request, Response, ValidRequest};
 use crate::types::{BufferError, SignedMsgType};
 use crate::versions::ProtocolVersion;
@@ -33,26 +32,25 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
         }
     }
 
+    pub fn chain_id(&self) -> &str {
+        &self.chain_id
+    }
+
     pub fn public_key(&self) -> Result<PublicKey, SignerError> {
         self.signer.public_key()
     }
 
-    pub fn sign(
+    pub fn sign_request(
         &mut self,
-        request: PersistedRequest,
-    ) -> Result<
-        Response<V::ProposalResponse, V::VoteResponse, V::PubKeyResponse, V::PingResponse>,
-        SignerError,
-    > {
-        match request.0 {
+        request: &ValidRequest,
+    ) -> Result<(Vec<u8>, Option<Vec<u8>>), SignerError> {
+        match request {
             ValidRequest::Proposal(proposal) => {
                 let signable_data = V::proposal_to_bytes(&proposal, &self.chain_id)?;
                 let signature = self.signer.sign(&signable_data)?;
                 debug!("Signature: {}", hex::encode(&signature));
                 debug!("Signable data: {}", hex::encode(&signable_data));
-
-                let response = V::create_proposal_response(&proposal, signature);
-                Ok(Response::SignedProposal(response))
+                Ok((signature, None))
             }
             ValidRequest::Vote(vote) => {
                 // TODO: chain id should be parsed from the request, and compared to what we're expecting
@@ -73,14 +71,12 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
                         hex::encode(&extension_signable_data)
                     );
                     debug!("Extension signature: {}", hex::encode(&ext_sig));
-                    let response = V::create_vote_response(&vote, signature, Some(ext_sig));
-                    return Ok(Response::SignedVote(response));
+                    return Ok((signature, Some(ext_sig)));
                 }
                 info!("no vote ext this time");
                 debug!("Signature: {}", hex::encode(&signature));
                 debug!("Signable data: {}", hex::encode(&signable_data));
-                let response = V::create_vote_response(&vote, signature, None);
-                Ok(Response::SignedVote(response))
+                Ok((signature, None))
             }
         }
     }
