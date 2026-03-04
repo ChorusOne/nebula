@@ -240,12 +240,7 @@ fn signing_rejected_if_not_leader() {
         Some(v0_38::privval::message::Sum::SignedProposalResponse(res)) => {
             assert!(res.error.is_some());
             println!("{}", res.error.clone().unwrap().description);
-            assert!(
-                res.error
-                    .unwrap()
-                    .description
-                    .contains("Cannot persist new consensus state")
-            );
+            assert!(res.error.unwrap().description.contains("Not leader"));
         }
         _ => panic!("Wrong response type"),
     }
