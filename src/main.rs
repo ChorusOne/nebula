@@ -344,7 +344,6 @@ fn vote_sign_data<V: ProtocolVersion>(
 /// For consensus requests (Proposal or Vote), check the request against the signer's state and:
 /// - for proposals, check if the height/round has already been signed. If yes, reply with a "would double sign error". If no, return a command to persist the state and sign over the proposal.
 /// - for votes, build the corresponding consensus state (height/round/step and sign bytes) and:
-///   - first check the signature cache for a matching entry. If present, return a command to replay the cached signature.
 ///   - if the request matches the current signer state at the same height/round/step:
 ///     - if the stored vote and incoming vote are identical besides timestamp differences allowed by the protocol version, return a command to sign again and persist.
 ///     - if the stored vote is identical, return a command to replay the stored signature.
