@@ -413,12 +413,13 @@ fn process_request<V: ProtocolVersion>(
                 )?;
 
                 if only_ts {
-                    if !ext_matches {
-                        info!("only ts differs, but ext data does not match. not signing");
-                        return Ok(RequestProcessingAction::ReplyWith(Response::Vote(
-                            V::create_double_sign_vote_response(&request_state),
-                        )));
-                    }
+                    // Vote extensions are non-deterministic
+                    // if !ext_matches {
+                    //     info!("only ts differs, but ext data does not match. not signing");
+                    //     return Ok(RequestProcessingAction::ReplyWith(Response::Vote(
+                    //         V::create_double_sign_vote_response(&request_state),
+                    //     )));
+                    // }
                     info!(
                         "only ts differs, issuing a sign command. current state: {}",
                         current_state
