@@ -423,7 +423,7 @@ fn leader_election_during_signing() {
     followers.push(initial_leader);
     let nodes = followers;
 
-    let (new_leader_node, _) = wait_for_leader_and_pop(nodes);
+    let (new_leader_node, _remaining_followers) = wait_for_leader_and_pop(nodes);
     let new_leader_id = new_leader_node.raft_state.read().unwrap().1;
     assert_ne!(
         new_leader_id, initial_leader_id,
@@ -501,7 +501,7 @@ fn signing_old_blocks_after_state_advancement() {
 }
 
 #[test]
-fn mixed_vote_types_with_state_transitions() {
+fn lower_vote_step_is_rejected_after_precommit() {
     let harness = TestHarness::new(1);
     let nodes = harness.nodes;
     let (leader_node, _) = wait_for_leader_and_pop(nodes);
@@ -536,13 +536,11 @@ fn mixed_vote_types_with_state_transitions() {
 
     match response_msg.sum {
         Some(v0_38::privval::message::Sum::SignedVoteResponse(res)) => {
-            assert!(res.error.is_none(), "Should replay duplicate prevote");
             assert!(
-                res.vote
-                    .as_ref()
-                    .is_some_and(|vote| !vote.signature.is_empty()),
-                "Replay response should include vote signature"
+                res.error.is_some(),
+                "CometBFT last-sign-state rules reject a prevote after precommit at the same height and round"
             );
+            assert!(res.vote.is_none());
         }
         _ => panic!("Expected SignedVoteResponse"),
     }
@@ -677,7 +675,7 @@ fn duplicate_proposal_rejected_after_leadership_change() {
 
     followers.push(initial_leader);
     let nodes = followers;
-    let (new_leader_node, _) = wait_for_leader_and_pop(nodes);
+    let (new_leader_node, _remaining_followers) = wait_for_leader_and_pop(nodes);
 
     let (mut signer2, handle2) = create_signer_with_mock_conn();
 
@@ -768,7 +766,7 @@ fn new_leader_signing() {
 
     initial_leader.shutdown().unwrap();
 
-    let (new_leader_node, _) = wait_for_leader_and_pop(followers);
+    let (new_leader_node, _remaining_follower) = wait_for_leader_and_pop(followers);
 
     let new_leader = Arc::new(Mutex::new(new_leader_node));
     handle_single_request(&mut signer1, &new_leader).unwrap();
@@ -809,7 +807,7 @@ fn some_turbulence() {
     yet_another_leader.shutdown().unwrap();
     thread::sleep(Duration::from_millis(500));
 
-    let (new_leader_node, _) = wait_for_leader_and_pop(remaining_nodes);
+    let (new_leader_node, _surviving_nodes) = wait_for_leader_and_pop(remaining_nodes);
 
     let new_leader = Arc::new(Mutex::new(new_leader_node));
     handle_single_request(&mut signer1, &new_leader).unwrap();

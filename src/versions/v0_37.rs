@@ -51,6 +51,13 @@ impl ProtocolVersion for VersionV0_37 {
         todo!("0.37")
     }
 
+    fn restore_vote_timestamp(
+        _vote: &mut Vote,
+        _persisted_sign_bytes: &[u8],
+    ) -> Result<(), SignerError> {
+        todo!("v0.37")
+    }
+
     fn create_double_sign_vote_response(_cd: &ConsensusData) -> Self::VoteResponse {
         todo!()
     }

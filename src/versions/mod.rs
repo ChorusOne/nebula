@@ -40,6 +40,10 @@ pub trait ProtocolVersion {
         old_sign_bytes: &[u8],
         new_sign_bytes: &[u8],
     ) -> Result<bool, SignerError>;
+    fn restore_vote_timestamp(
+        vote: &mut Vote,
+        persisted_sign_bytes: &[u8],
+    ) -> Result<(), SignerError>;
     fn create_proposal_response(proposal: &Proposal, signature: Vec<u8>) -> Self::ProposalResponse;
     fn create_double_sign_prop_response(cd: &ConsensusData) -> Self::ProposalResponse;
     fn create_double_sign_vote_response(cd: &ConsensusData) -> Self::VoteResponse;

@@ -3,6 +3,16 @@ use crate::protocol::CheckedRequest;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+const CONSENSUS_DATA_FIELDS: &[&str] = &[
+    "height",
+    "round",
+    "step",
+    "sign_data",
+    "signature",
+    "ext_sign_data",
+    "ext_signature",
+];
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlockId {
     pub hash: Vec<u8>,
@@ -214,6 +224,51 @@ impl std::fmt::Display for ConsensusData {
 }
 
 impl ConsensusData {
+    /// Validates and normalizes a replicated signer-state transition.
+    ///
+    /// H/R/S may only move forward. At the same H/R/S, the already persisted
+    /// core sign bytes and signature are immutable; vote-extension fields may
+    /// be refreshed because CometBFT does not include them in duplicate-vote
+    /// evidence.
+    pub fn validated_update(&self, next: &ConsensusData) -> Result<ConsensusData, SignerError> {
+        match next.hrs_cmp(self) {
+            std::cmp::Ordering::Less => {
+                return Err(SignerError::StateReplication(format!(
+                    "refusing signer-state regression from {self} to {next}"
+                )));
+            }
+            std::cmp::Ordering::Equal if self.has_core_signature() => {
+                let same_sign_bytes = next.sign_data == self.sign_data;
+                let core_is_identified = !self.sign_data.is_empty()
+                    || (!self.signature.is_empty() && next.signature == self.signature);
+                if !same_sign_bytes || !core_is_identified {
+                    return Err(SignerError::DoubleSignError);
+                }
+            }
+            _ => {}
+        }
+
+        let mut validated = next.clone();
+        if next.hrs_cmp(self) == std::cmp::Ordering::Equal && self.has_core_signature() {
+            validated.sign_data = self.sign_data.clone();
+            if !self.signature.is_empty() {
+                validated.signature = self.signature.clone();
+            }
+        }
+        Ok(validated)
+    }
+
+    fn has_core_signature(&self) -> bool {
+        !self.sign_data.is_empty() || !self.signature.is_empty()
+    }
+
+    fn hrs_cmp(&self, other: &ConsensusData) -> std::cmp::Ordering {
+        self.height
+            .cmp(&other.height)
+            .then_with(|| self.round.cmp(&other.round))
+            .then_with(|| consensus_step_rank(self.step).cmp(&consensus_step_rank(other.step)))
+    }
+
     pub fn _persist_to_file(&self, path: &std::path::Path) -> std::io::Result<()> {
         let json = serde_json::to_string_pretty(self)?;
         let temp_path = path.with_extension("json.tmp");
@@ -222,8 +277,8 @@ impl ConsensusData {
     }
 
     pub fn load_from_file(path: &std::path::Path) -> Option<ConsensusData> {
-        let json = std::fs::read_to_string(path).ok()?;
-        serde_json::from_str(&json).ok()
+        let bytes = std::fs::read(path).ok()?;
+        Self::from_bytes(&bytes)
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
@@ -231,6 +286,23 @@ impl ConsensusData {
     }
 
     pub fn from_bytes(buf: &[u8]) -> Option<ConsensusData> {
-        serde_json::from_slice(buf).ok()
+        let value: serde_json::Value = serde_json::from_slice(buf).ok()?;
+        let object = value.as_object()?;
+        if CONSENSUS_DATA_FIELDS
+            .iter()
+            .any(|field| !object.contains_key(*field))
+        {
+            return None;
+        }
+        serde_json::from_value(value).ok()
+    }
+}
+
+fn consensus_step_rank(step: SignedMsgType) -> u8 {
+    match step {
+        SignedMsgType::Unknown => 0,
+        SignedMsgType::Proposal => 1,
+        SignedMsgType::Prevote => 2,
+        SignedMsgType::Precommit => 3,
     }
 }

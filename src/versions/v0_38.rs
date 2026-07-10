@@ -166,6 +166,27 @@ impl ProtocolVersion for VersionV0_38 {
         Ok(old == new)
     }
 
+    fn restore_vote_timestamp(
+        vote: &mut Vote,
+        persisted_sign_bytes: &[u8],
+    ) -> Result<(), SignerError> {
+        let canonical = v0_38::types::CanonicalVote::decode_length_delimited(persisted_sign_bytes)?;
+        vote.timestamp = canonical
+            .timestamp
+            .map(|timestamp| {
+                if !(0..1_000_000_000).contains(&timestamp.nanos) {
+                    return Err(SignerError::InvalidTimestamp);
+                }
+                timestamp
+                    .seconds
+                    .checked_mul(1_000_000_000)
+                    .and_then(|seconds| seconds.checked_add(i64::from(timestamp.nanos)))
+                    .ok_or(SignerError::InvalidTimestamp)
+            })
+            .transpose()?;
+        Ok(())
+    }
+
     fn create_double_sign_vote_response(cd: &ConsensusData) -> Self::VoteResponse {
         v0_38::privval::SignedVoteResponse {
             vote: None,

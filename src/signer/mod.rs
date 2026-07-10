@@ -84,6 +84,20 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
         }
     }
 
+    pub fn sign_vote_extension(
+        &mut self,
+        vote: &crate::types::Vote,
+    ) -> Result<Vec<u8>, SignerError> {
+        if vote.step != SignedMsgType::Precommit
+            || vote.block_id.as_ref().is_none_or(|id| id.hash.is_empty())
+        {
+            return Err(SignerError::InvalidData);
+        }
+
+        let signable_data = V::vote_extension_to_bytes(vote, &self.chain_id)?;
+        self.signer.sign(&signable_data)
+    }
+
     pub fn read_request(&mut self) -> Result<Request, SignerError> {
         let msg_bytes = self.read_complete_message()?;
         let (request, _chain_id) = V::parse_request(msg_bytes)?;

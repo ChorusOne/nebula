@@ -284,6 +284,10 @@ enum RequestProcessingAction<V: ProtocolVersion> {
         request: CheckedRequest,
         cached: ConsensusData,
     },
+    ReplayCoreAndSignExtension {
+        vote: Vote,
+        cached: ConsensusData,
+    },
     ReplyWith(Response<V::ProposalResponse, V::VoteResponse, V::PubKeyResponse, V::PingResponse>),
     // TODO: remove this and use ReplyWith
     ShowPublicKey,
@@ -338,6 +342,102 @@ fn vote_sign_data<V: ProtocolVersion>(
     Ok((sign_data, ext_sign_data))
 }
 
+fn process_vote_request<V: ProtocolVersion>(
+    mut vote: Vote,
+    current_state: ConsensusData,
+    chain_id: &str,
+) -> Result<RequestProcessingAction<V>, SignerError> {
+    trace!("checking vote: {}", vote);
+    let (sign_data, ext_sign_data) = vote_sign_data::<V>(&vote, chain_id)?;
+
+    let request_state = ConsensusData {
+        height: vote.height,
+        round: vote.round,
+        step: vote.step,
+        sign_data,
+        ext_sign_data,
+        ..Default::default()
+    };
+
+    let is_same_hrs = current_state.height == request_state.height
+        && current_state.round == request_state.round
+        && current_state.step == request_state.step;
+
+    if is_same_hrs && !current_state.sign_data.is_empty() {
+        let ext_matches = if request_state.ext_sign_data.is_empty() {
+            current_state.ext_sign_data.is_empty() && current_state.ext_signature.is_empty()
+        } else {
+            current_state.ext_sign_data == request_state.ext_sign_data
+                && !current_state.ext_signature.is_empty()
+        };
+
+        if current_state.sign_data == request_state.sign_data
+            && !current_state.signature.is_empty()
+            && ext_matches
+        {
+            info!("replaying stored vote signature for vote: {}", vote);
+            return Ok(RequestProcessingAction::ReplayFromCache {
+                request: CheckedRequest::Vote(vote),
+                cached: current_state,
+            });
+        }
+
+        let only_ts = V::vote_sign_bytes_only_differ_by_timestamp(
+            &current_state.sign_data,
+            &request_state.sign_data,
+        )?;
+
+        if only_ts && !current_state.signature.is_empty() {
+            V::restore_vote_timestamp(&mut vote, &current_state.sign_data)?;
+
+            if !request_state.ext_sign_data.is_empty() && !ext_matches {
+                info!(
+                    "replaying the persisted core vote and signing a fresh vote extension: {}",
+                    current_state
+                );
+                return Ok(RequestProcessingAction::ReplayCoreAndSignExtension {
+                    vote,
+                    cached: current_state,
+                });
+            }
+
+            let mut cached = current_state;
+            if request_state.ext_sign_data.is_empty() {
+                cached.ext_sign_data.clear();
+                cached.ext_signature.clear();
+            }
+            info!(
+                "restoring the persisted vote timestamp and replaying its core signature: {}",
+                cached
+            );
+            return Ok(RequestProcessingAction::ReplayFromCache {
+                request: CheckedRequest::Vote(vote),
+                cached,
+            });
+        }
+
+        return Ok(RequestProcessingAction::ReplyWith(Response::Vote(
+            V::create_double_sign_vote_response(&request_state),
+        )));
+    }
+
+    info!("checking vote, current state: {}", current_state);
+    match vote.check(&current_state) {
+        protocol::CheckedVoteRequest::DoubleSignVote(consensus_data) => {
+            Ok(RequestProcessingAction::ReplyWith(Response::Vote(
+                V::create_double_sign_vote_response(&consensus_data),
+            )))
+        }
+        protocol::CheckedVoteRequest::ValidRequest(checked_request) => {
+            info!("valid vote, issuing a sign and persist command");
+            Ok(RequestProcessingAction::SignAndPersist {
+                request: checked_request,
+                request_state,
+            })
+        }
+    }
+}
+
 /// Determines the course of action for a request.
 ///
 /// For non-consensus requests (Show public key or Ping), return a command with a ready to send reply.
@@ -345,7 +445,7 @@ fn vote_sign_data<V: ProtocolVersion>(
 /// - for proposals, check if the height/round has already been signed. If yes, reply with a "would double sign error". If no, return a command to persist the state and sign over the proposal.
 /// - for votes, build the corresponding consensus state (height/round/step and sign bytes) and:
 ///   - if the request matches the current signer state at the same height/round/step:
-///     - if the stored vote and incoming vote are identical besides timestamp differences allowed by the protocol version, return a command to sign again and persist.
+///     - if the stored vote and incoming vote are identical besides timestamp differences allowed by the protocol version, restore the persisted timestamp and replay the persisted core signature.
 ///     - if the stored vote is identical, return a command to replay the stored signature.
 ///     - if the vote conflicts with the stored state, reply with a "would double sign error".
 ///   - otherwise, run the standard vote validation against the signer state and either return a double sign error or a command to persist the state and sign the vote.
@@ -371,86 +471,11 @@ fn process_request<V: ProtocolVersion>(
                 }
             }
         }
-        Request::Vote(vote) => {
-            trace!("checking vote: {}", vote);
-            let (sign_data, ext_sign_data) = vote_sign_data::<V>(&vote, chain_id)?;
-
-            let request_state = ConsensusData {
-                height: vote.height,
-                round: vote.round,
-                step: vote.step,
-                sign_data,
-                ext_sign_data,
-                ..Default::default()
-            };
-
-            let current_state = raft_node.signer_state.read().unwrap().clone();
-            let is_same_hrs = current_state.height == request_state.height
-                && current_state.round == request_state.round
-                && current_state.step == request_state.step;
-
-            if is_same_hrs && !current_state.sign_data.is_empty() {
-                let ext_matches = if request_state.ext_sign_data.is_empty() {
-                    current_state.ext_sign_data.is_empty() && current_state.ext_signature.is_empty()
-                } else {
-                    current_state.ext_sign_data == request_state.ext_sign_data
-                };
-
-                if current_state.sign_data == request_state.sign_data
-                    && !current_state.signature.is_empty()
-                    && ext_matches
-                {
-                    info!("replaying stored vote signature for vote: {}", vote);
-                    return Ok(RequestProcessingAction::ReplayFromCache {
-                        request: CheckedRequest::Vote(vote),
-                        cached: current_state,
-                    });
-                }
-
-                let only_ts = V::vote_sign_bytes_only_differ_by_timestamp(
-                    &current_state.sign_data,
-                    &request_state.sign_data,
-                )?;
-
-                if only_ts {
-                    // Vote extensions are non-deterministic
-                    // if !ext_matches {
-                    //     info!("only ts differs, but ext data does not match. not signing");
-                    //     return Ok(RequestProcessingAction::ReplyWith(Response::Vote(
-                    //         V::create_double_sign_vote_response(&request_state),
-                    //     )));
-                    // }
-                    info!(
-                        "only ts differs, issuing a sign command. current state: {}",
-                        current_state
-                    );
-                    return Ok(RequestProcessingAction::SignAndPersist {
-                        request: CheckedRequest::Vote(vote),
-                        request_state,
-                    });
-                }
-
-                return Ok(RequestProcessingAction::ReplyWith(Response::Vote(
-                    V::create_double_sign_vote_response(&request_state),
-                )));
-            }
-
-            info!("checking vote, current state: {}", current_state);
-            match vote.check(&current_state) {
-                protocol::CheckedVoteRequest::DoubleSignVote(consensus_data) => {
-                    Ok(RequestProcessingAction::ReplyWith(Response::Vote(
-                        V::create_double_sign_vote_response(&consensus_data),
-                    )))
-                }
-                protocol::CheckedVoteRequest::ValidRequest(checked_request) => {
-                    info!("valid vote, issuing a sign and persist command");
-                    Ok(RequestProcessingAction::SignAndPersist {
-                        request: checked_request,
-                        request_state,
-                    })
-                }
-            }
-        }
+        Request::Vote(vote) => process_vote_request::<V>(
+            vote,
+            raft_node.signer_state.read().unwrap().clone(),
+            chain_id,
+        ),
         Request::ShowPublicKey => Ok(RequestProcessingAction::ShowPublicKey),
         Request::Ping => Ok(RequestProcessingAction::ReplyWith(Response::Ping(
             V::create_ping_response(),
@@ -480,6 +505,14 @@ pub fn handle_single_request<T: SigningBackend, V: ProtocolVersion, C: Read + Wr
             mut request_state,
         } => {
             let (signature, extension_signature) = signer.sign_request(&request)?;
+            if request_state.sign_data.is_empty() {
+                request_state.sign_data = match &request {
+                    CheckedRequest::Proposal(proposal) => {
+                        V::proposal_to_bytes(proposal, signer.chain_id())?
+                    }
+                    CheckedRequest::Vote(vote) => V::vote_to_bytes(vote, signer.chain_id())?,
+                };
+            }
             request_state.signature = signature.clone();
             request_state.ext_signature = extension_signature.clone().unwrap_or_default();
 
@@ -503,6 +536,11 @@ pub fn handle_single_request<T: SigningBackend, V: ProtocolVersion, C: Read + Wr
                 cached.signature.clone(),
                 (!cached.ext_signature.is_empty()).then_some(cached.ext_signature.clone()),
             )
+        }
+        RequestProcessingAction::ReplayCoreAndSignExtension { vote, cached } => {
+            let extension_signature = signer.sign_vote_extension(&vote)?;
+            info!("responding with a cached core signature and fresh vote extension signature");
+            vote_response_from_signature::<V>(&vote, cached.signature, Some(extension_signature))
         }
         RequestProcessingAction::ReplyWith(response) => response,
         RequestProcessingAction::ShowPublicKey => {
@@ -558,6 +596,98 @@ fn reconnect<V: ProtocolVersion>(
             Err(e) => {
                 error!("Reconnection failed for {}:{} - {}", host, port, e);
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod request_safety_tests {
+    use super::*;
+    use crate::types::{BlockId, PartSetHeader, SignedMsgType};
+
+    fn test_vote(step: SignedMsgType, timestamp: i64, extension: &[u8]) -> Vote {
+        Vote {
+            step,
+            height: 42,
+            round: 3,
+            timestamp: Some(timestamp),
+            block_id: Some(BlockId {
+                hash: vec![0xAA; 32],
+                parts: Some(PartSetHeader {
+                    total: 1,
+                    hash: vec![0xBB; 32],
+                }),
+            }),
+            validator_address: vec![0xCC; 20],
+            validator_index: 7,
+            extension: extension.to_vec(),
+            extension_signature: vec![],
+        }
+    }
+
+    fn persisted_vote(vote: &Vote) -> ConsensusData {
+        let (sign_data, ext_sign_data) =
+            vote_sign_data::<VersionV0_38>(vote, "timestamp-test-chain").unwrap();
+        ConsensusData {
+            height: vote.height,
+            round: vote.round,
+            step: vote.step,
+            sign_data,
+            signature: b"persisted-core-signature".to_vec(),
+            ext_sign_data,
+            ext_signature: b"persisted-extension-signature".to_vec(),
+        }
+    }
+
+    #[test]
+    fn timestamp_only_retry_restores_timestamp_and_replays_core_signature() {
+        let original = test_vote(SignedMsgType::Prevote, 1_700_000_000_000_000_001, &[]);
+        let cached = persisted_vote(&original);
+        let retry = test_vote(SignedMsgType::Prevote, 1_700_000_000_999_999_999, &[]);
+
+        let action =
+            process_vote_request::<VersionV0_38>(retry, cached.clone(), "timestamp-test-chain")
+                .unwrap();
+
+        match action {
+            RequestProcessingAction::ReplayFromCache {
+                request: CheckedRequest::Vote(vote),
+                cached: replayed,
+            } => {
+                assert_eq!(vote.timestamp, original.timestamp);
+                assert_eq!(replayed.signature, cached.signature);
+            }
+            _ => panic!("timestamp-only retry must not create a second core signature"),
+        }
+    }
+
+    #[test]
+    fn changed_vote_extension_reuses_core_but_requests_fresh_extension_signature() {
+        let original = test_vote(
+            SignedMsgType::Precommit,
+            1_700_000_000_000_000_001,
+            b"extension-a",
+        );
+        let cached = persisted_vote(&original);
+        let retry = test_vote(
+            SignedMsgType::Precommit,
+            1_700_000_000_999_999_999,
+            b"extension-b",
+        );
+
+        let action =
+            process_vote_request::<VersionV0_38>(retry, cached.clone(), "timestamp-test-chain")
+                .unwrap();
+
+        match action {
+            RequestProcessingAction::ReplayCoreAndSignExtension {
+                vote,
+                cached: replayed,
+            } => {
+                assert_eq!(vote.timestamp, original.timestamp);
+                assert_eq!(replayed.signature, cached.signature);
+            }
+            _ => panic!("vote-extension changes must not re-sign the core vote"),
         }
     }
 }
