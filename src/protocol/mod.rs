@@ -12,14 +12,15 @@ pub enum Request {
 
 pub enum CheckedVoteRequest {
     DoubleSignVote(ConsensusData),
-    ValidRequest(ValidRequest),
+    ValidRequest(CheckedRequest),
 }
 pub enum CheckedProposalRequest {
     DoubleSignProposal(ConsensusData),
-    ValidRequest(ValidRequest),
+    ValidRequest(CheckedRequest),
 }
 
-pub enum ValidRequest {
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub enum CheckedRequest {
     Proposal(Proposal),
     Vote(Vote),
 }
@@ -44,10 +45,9 @@ impl fmt::Debug for Request {
 }
 
 #[derive(Debug)]
-#[non_exhaustive]
 pub enum Response<P, V, K, G> {
-    SignedProposal(P),
-    SignedVote(V),
+    Proposal(P),
+    Vote(V),
     PublicKey(K),
     Ping(G),
 }
@@ -58,9 +58,10 @@ impl Vote {
             height: self.height,
             round: self.round,
             step: self.step,
+            ..Default::default()
         };
         if should_sign_vote(state, &self) {
-            CheckedVoteRequest::ValidRequest(ValidRequest::Vote(self))
+            CheckedVoteRequest::ValidRequest(CheckedRequest::Vote(self))
         } else {
             CheckedVoteRequest::DoubleSignVote(req_state)
         }
@@ -72,9 +73,10 @@ impl Proposal {
             height: self.height,
             round: self.round,
             step: self.step,
+            ..Default::default()
         };
         if should_sign_proposal(state, &self) {
-            CheckedProposalRequest::ValidRequest(ValidRequest::Proposal(self))
+            CheckedProposalRequest::ValidRequest(CheckedRequest::Proposal(self))
         } else {
             CheckedProposalRequest::DoubleSignProposal(req_state)
         }
@@ -89,7 +91,7 @@ A signer should only sign a proposal p if any of the following lines are true:
 
 In other words, a proposal should only be signed if it’s at a higher height, or a higher round for the same height. Once a proposal or vote has been signed for a given height and round, a proposal should never be signed for the same height and round.
 */
-fn should_sign_proposal(state: &ConsensusData, proposal: &Proposal) -> bool {
+pub fn should_sign_proposal(state: &ConsensusData, proposal: &Proposal) -> bool {
     if proposal.step != SignedMsgType::Proposal {
         return false;
     }
@@ -137,7 +139,7 @@ In other words, a vote should only be signed if it’s:
   - a prevote for the same height and round where we haven’t signed a prevote or precommit (but have signed a proposal)
   - a precommit for the same height and round where we haven’t signed a precommit (but have signed a proposal and/or a prevote)
 */
-fn should_sign_vote(state: &ConsensusData, vote: &Vote) -> bool {
+pub fn should_sign_vote(state: &ConsensusData, vote: &Vote) -> bool {
     info!(
         "checking if vote should be signed, state: {}, vote: {}/{}/{:?}",
         state, vote.height, vote.round, vote.step
@@ -188,6 +190,7 @@ fn should_sign_proposal_logic() {
         height: 10,
         round: 1,
         step: SignedMsgType::Proposal,
+        ..Default::default()
     };
 
     let p1 = Proposal {
@@ -239,6 +242,7 @@ fn should_sign_vote_logic() {
         height: 10,
         round: 1,
         step: SignedMsgType::Proposal,
+        ..Default::default()
     };
     let block_id = Some(crate::types::BlockId {
         hash: vec![1],
@@ -285,6 +289,7 @@ fn should_sign_vote_logic() {
         height: 10,
         round: 1,
         step: SignedMsgType::Prevote,
+        ..Default::default()
     };
     assert!(should_sign_vote(&state_after_prevote, &v4));
 
@@ -292,6 +297,7 @@ fn should_sign_vote_logic() {
         height: 10,
         round: 1,
         step: SignedMsgType::Precommit,
+        ..Default::default()
     };
     assert!(!should_sign_vote(&state_after_precommit, &v4));
 
@@ -312,18 +318,13 @@ fn test_step_transition_proposal() {
         height: 10,
         round: 1,
         step: SignedMsgType::Proposal,
+        ..Default::default()
     };
-    assert_eq!(valid_step_transition(&state, SignedMsgType::Prevote), true);
+    assert!(valid_step_transition(&state, SignedMsgType::Prevote));
     // moving to pre-commit is always valid from non-precommit states
-    assert_eq!(
-        valid_step_transition(&state, SignedMsgType::Precommit),
-        true
-    );
-    assert_eq!(valid_step_transition(&state, SignedMsgType::Unknown), false);
-    assert_eq!(
-        valid_step_transition(&state, SignedMsgType::Proposal),
-        false
-    );
+    assert!(valid_step_transition(&state, SignedMsgType::Precommit));
+    assert!(!valid_step_transition(&state, SignedMsgType::Unknown));
+    assert!(!valid_step_transition(&state, SignedMsgType::Proposal));
 }
 
 #[test]
@@ -332,18 +333,13 @@ fn test_step_transition_precommit() {
         height: 10,
         round: 1,
         step: SignedMsgType::Precommit,
+        ..Default::default()
     };
     // moving from pre-commit is never allowed
-    assert_eq!(
-        valid_step_transition(&state, SignedMsgType::Precommit),
-        false
-    );
-    assert_eq!(valid_step_transition(&state, SignedMsgType::Prevote), false);
-    assert_eq!(valid_step_transition(&state, SignedMsgType::Unknown), false);
-    assert_eq!(
-        valid_step_transition(&state, SignedMsgType::Proposal),
-        false
-    );
+    assert!(!valid_step_transition(&state, SignedMsgType::Precommit));
+    assert!(!valid_step_transition(&state, SignedMsgType::Prevote));
+    assert!(!valid_step_transition(&state, SignedMsgType::Unknown));
+    assert!(!valid_step_transition(&state, SignedMsgType::Proposal));
 }
 
 #[test]
@@ -352,18 +348,13 @@ fn test_step_transition_unknown() {
         height: 10,
         round: 1,
         step: SignedMsgType::Unknown,
+        ..Default::default()
     };
     // can only transition to precommit
-    assert_eq!(
-        valid_step_transition(&state, SignedMsgType::Precommit),
-        true
-    );
-    assert_eq!(valid_step_transition(&state, SignedMsgType::Prevote), false);
-    assert_eq!(valid_step_transition(&state, SignedMsgType::Unknown), false);
-    assert_eq!(
-        valid_step_transition(&state, SignedMsgType::Proposal),
-        false
-    );
+    assert!(valid_step_transition(&state, SignedMsgType::Precommit));
+    assert!(!valid_step_transition(&state, SignedMsgType::Prevote));
+    assert!(!valid_step_transition(&state, SignedMsgType::Unknown));
+    assert!(!valid_step_transition(&state, SignedMsgType::Proposal));
 }
 
 #[test]
@@ -372,15 +363,10 @@ fn test_step_transition_prevote() {
         height: 10,
         round: 1,
         step: SignedMsgType::Prevote,
+        ..Default::default()
     };
-    assert_eq!(
-        valid_step_transition(&state, SignedMsgType::Precommit),
-        true
-    );
-    assert_eq!(valid_step_transition(&state, SignedMsgType::Prevote), false);
-    assert_eq!(valid_step_transition(&state, SignedMsgType::Unknown), false);
-    assert_eq!(
-        valid_step_transition(&state, SignedMsgType::Proposal),
-        false
-    );
+    assert!(valid_step_transition(&state, SignedMsgType::Precommit));
+    assert!(!valid_step_transition(&state, SignedMsgType::Prevote));
+    assert!(!valid_step_transition(&state, SignedMsgType::Unknown));
+    assert!(!valid_step_transition(&state, SignedMsgType::Proposal));
 }

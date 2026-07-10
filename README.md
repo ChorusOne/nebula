@@ -162,6 +162,17 @@ key_type = "ed25519"
 `raft` section defines settings for the Raft signer cluster.
 Peer list must include EVERY member of the cluster, including the very node you're setting up.
 
+> **Security:** Nebula's Raft TCP transport does not currently authenticate peers. Raft node IDs
+> are only an allowlist, not cryptographic identities. Expose these ports only through an
+> authenticated private network (for example, mutually authenticated WireGuard or mTLS). An
+> attacker able to connect and impersonate peer IDs can forge quorum acknowledgements and make
+> partitioned signers double-sign.
+>
+> **Storage upgrade:** the durable Raft format records the truncated log index and its original
+> term separately. Databases created by older versions do not contain enough information for a
+> safe automatic migration and now fail closed at startup. Do not attempt a rolling upgrade with
+> old `raft_data`; plan a coordinated backup/export and cluster rebootstrap procedure first.
+
 For native signing, you can generate keys with `./target/release/nebula keys generate --key-type ed25519`.
 Example output:
 ```

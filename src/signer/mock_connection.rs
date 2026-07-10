@@ -53,8 +53,8 @@ impl Read for MockCometBFTConnection {
         }
 
         let bytes_to_read = std::cmp::min(buf.len(), self.read_buffer.len());
-        for i in 0..bytes_to_read {
-            buf[i] = self.read_buffer.pop_front().unwrap();
+        for byte in buf.iter_mut().take(bytes_to_read) {
+            *byte = self.read_buffer.pop_front().unwrap();
         }
 
         Ok(bytes_to_read)

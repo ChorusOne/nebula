@@ -1,8 +1,19 @@
-use crate::{SignerError, protocol::ValidRequest};
+use crate::error::SignerError;
+use crate::protocol::CheckedRequest;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-#[derive(Debug, Clone)]
+const CONSENSUS_DATA_FIELDS: &[&str] = &[
+    "height",
+    "round",
+    "step",
+    "sign_data",
+    "signature",
+    "ext_sign_data",
+    "ext_signature",
+];
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlockId {
     pub hash: Vec<u8>,
     pub parts: Option<PartSetHeader>,
@@ -25,6 +36,7 @@ impl From<PartSetHeader> for crate::proto::v1::types::PartSetHeader {
         }
     }
 }
+
 impl From<crate::proto::v1::types::BlockId> for BlockId {
     fn from(block_id: crate::proto::v1::types::BlockId) -> BlockId {
         BlockId {
@@ -43,13 +55,13 @@ impl From<crate::proto::v1::types::PartSetHeader> for PartSetHeader {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PartSetHeader {
     pub total: u32,
     pub hash: Vec<u8>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum SignedMsgType {
     #[default]
     Unknown = 0,
@@ -58,7 +70,7 @@ pub enum SignedMsgType {
     Proposal = 32,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Vote {
     pub step: SignedMsgType,
     pub height: i64,
@@ -70,6 +82,7 @@ pub struct Vote {
     pub extension: Vec<u8>,
     pub extension_signature: Vec<u8>,
 }
+
 impl std::fmt::Display for Vote {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -110,7 +123,6 @@ impl From<SignedMsgType> for i32 {
     }
 }
 
-// this is getting messy, probably something wrong with the types somewhere?
 impl From<u8> for SignedMsgType {
     fn from(n: u8) -> Self {
         match n {
@@ -122,7 +134,7 @@ impl From<u8> for SignedMsgType {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Proposal {
     pub step: SignedMsgType,
     pub height: i64,
@@ -148,12 +160,13 @@ pub enum KeyType {
 
 impl TryFrom<&str> for KeyType {
     type Error = SignerError;
+
     fn try_from(key_type_str: &str) -> Result<KeyType, SignerError> {
         match key_type_str {
             "ed25519" => Ok(KeyType::Ed25519),
             "secp256k1" => Ok(KeyType::Secp256k1),
             "bls12_381" => Ok(KeyType::Bls12381),
-            "bls12381" => Ok(KeyType::Bls12381), // TODO
+            "bls12381" => Ok(KeyType::Bls12381),
             _ => Err(SignerError::InvalidData),
         }
     }
@@ -169,25 +182,32 @@ impl From<KeyType> for String {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
 pub struct ConsensusData {
     pub height: i64,
     pub round: i64,
     pub step: SignedMsgType,
+    pub sign_data: Vec<u8>,
+    pub signature: Vec<u8>,
+    pub ext_sign_data: Vec<u8>,
+    pub ext_signature: Vec<u8>,
 }
 
-impl From<&ValidRequest> for ConsensusData {
-    fn from(value: &ValidRequest) -> Self {
+impl From<&CheckedRequest> for ConsensusData {
+    fn from(value: &CheckedRequest) -> Self {
         match value {
-            ValidRequest::Vote(v) => Self {
+            CheckedRequest::Vote(v) => Self {
                 height: v.height,
                 round: v.round,
                 step: v.step,
+                ..Default::default()
             },
-            ValidRequest::Proposal(p) => Self {
+            CheckedRequest::Proposal(p) => Self {
                 height: p.height,
                 round: p.round,
                 step: p.step,
+                ..Default::default()
             },
         }
     }
@@ -198,12 +218,57 @@ impl std::fmt::Display for ConsensusData {
         write!(
             f,
             "ConsensusData {}/{}/{:?}",
-            self.height, self.round, self.step
+            self.height, self.round, self.step,
         )
     }
 }
 
 impl ConsensusData {
+    /// Validates and normalizes a replicated signer-state transition.
+    ///
+    /// H/R/S may only move forward. At the same H/R/S, the already persisted
+    /// core sign bytes and signature are immutable; vote-extension fields may
+    /// be refreshed because CometBFT does not include them in duplicate-vote
+    /// evidence.
+    pub fn validated_update(&self, next: &ConsensusData) -> Result<ConsensusData, SignerError> {
+        match next.hrs_cmp(self) {
+            std::cmp::Ordering::Less => {
+                return Err(SignerError::StateReplication(format!(
+                    "refusing signer-state regression from {self} to {next}"
+                )));
+            }
+            std::cmp::Ordering::Equal if self.has_core_signature() => {
+                let same_sign_bytes = next.sign_data == self.sign_data;
+                let core_is_identified = !self.sign_data.is_empty()
+                    || (!self.signature.is_empty() && next.signature == self.signature);
+                if !same_sign_bytes || !core_is_identified {
+                    return Err(SignerError::DoubleSignError);
+                }
+            }
+            _ => {}
+        }
+
+        let mut validated = next.clone();
+        if next.hrs_cmp(self) == std::cmp::Ordering::Equal && self.has_core_signature() {
+            validated.sign_data = self.sign_data.clone();
+            if !self.signature.is_empty() {
+                validated.signature = self.signature.clone();
+            }
+        }
+        Ok(validated)
+    }
+
+    fn has_core_signature(&self) -> bool {
+        !self.sign_data.is_empty() || !self.signature.is_empty()
+    }
+
+    fn hrs_cmp(&self, other: &ConsensusData) -> std::cmp::Ordering {
+        self.height
+            .cmp(&other.height)
+            .then_with(|| self.round.cmp(&other.round))
+            .then_with(|| consensus_step_rank(self.step).cmp(&consensus_step_rank(other.step)))
+    }
+
     pub fn _persist_to_file(&self, path: &std::path::Path) -> std::io::Result<()> {
         let json = serde_json::to_string_pretty(self)?;
         let temp_path = path.with_extension("json.tmp");
@@ -212,14 +277,32 @@ impl ConsensusData {
     }
 
     pub fn load_from_file(path: &std::path::Path) -> Option<ConsensusData> {
-        let json = std::fs::read_to_string(path).ok()?;
-        serde_json::from_str(&json).ok()
+        let bytes = std::fs::read(path).ok()?;
+        Self::from_bytes(&bytes)
     }
-    pub fn to_bytes(self) -> Vec<u8> {
-        serde_json::to_vec(&self).unwrap()
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        serde_json::to_vec(self).unwrap()
     }
 
     pub fn from_bytes(buf: &[u8]) -> Option<ConsensusData> {
-        serde_json::from_slice(buf).ok()
+        let value: serde_json::Value = serde_json::from_slice(buf).ok()?;
+        let object = value.as_object()?;
+        if CONSENSUS_DATA_FIELDS
+            .iter()
+            .any(|field| !object.contains_key(*field))
+        {
+            return None;
+        }
+        serde_json::from_value(value).ok()
+    }
+}
+
+fn consensus_step_rank(step: SignedMsgType) -> u8 {
+    match step {
+        SignedMsgType::Unknown => 0,
+        SignedMsgType::Proposal => 1,
+        SignedMsgType::Prevote => 2,
+        SignedMsgType::Precommit => 3,
     }
 }

@@ -1,6 +1,5 @@
 use crate::error::SignerError;
-use hex;
-use log::{debug, info, trace};
+use log::{info, trace};
 use reqwest::blocking::{Client, ClientBuilder};
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde_json::Value;
@@ -167,7 +166,7 @@ impl PluginVaultSigner {
         let sig_bytes =
             base64::Engine::decode(&base64::engine::general_purpose::STANDARD, parts[2])?;
 
-        debug!("signed bytes from vault: {:?}", sig_bytes);
+        trace!("signed bytes from vault: {:?}", sig_bytes);
 
         let expected_sig_len = match self.pub_key.key_type {
             crate::types::KeyType::Ed25519 => 64,

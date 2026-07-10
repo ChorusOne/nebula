@@ -4,7 +4,7 @@ mod config;
 mod connection;
 mod error;
 mod keygen;
-mod persist;
+#[allow(clippy::all)]
 mod proto;
 mod protocol;
 mod signer;
@@ -12,22 +12,22 @@ mod types;
 mod versions;
 
 use crate::backend::SigningBackend;
+use crate::cluster::RaftEvent;
 use crate::error::SignerError;
 use crate::protocol::Response;
+use crate::types::Vote;
 use clap::{Parser as _, Subcommand};
 use cluster::SignerRaftNode;
-use config::{Config, PersistConfig, ProtocolVersionConfig};
-use log::{LevelFilter, debug, error, info, warn};
-use persist::{Persist, PersistVariants};
-use protocol::{CheckedProposalRequest, CheckedVoteRequest, Request, ValidRequest};
+use config::{Config, ProtocolVersionConfig};
+use log::{LevelFilter, error, info, trace, warn};
+use protocol::{CheckedRequest, Request};
 use signer::Signer;
 use std::io::{Read, Write};
-use std::net::TcpStream;
 use std::str::FromStr;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
-use tendermint_p2p::secret_connection::SecretConnection;
 use types::{ConsensusData, KeyType};
 use versions::{ProtocolVersion, VersionV0_34, VersionV0_37, VersionV0_38, VersionV1_0};
 
@@ -106,44 +106,100 @@ fn main() -> Result<(), SignerError> {
     }
 }
 
+/// Creates a Raft node and listens on events emitted by the Nebula Raft machinery.
+///
+/// There are two events emitted:
+/// - Leadership changed -> drives the leader loop
+/// - State applied -> currently, only used for tests
 fn start_signer(config: Config) -> Result<(), SignerError> {
     info!("Chain ID: {}", config.chain_id);
     info!("Protocol version: {:?}", config.version);
-    let state_persist: Arc<Mutex<PersistVariants>> = match &config.persist {
-        PersistConfig::Raft { raft } => {
-            info!("Node ID: {}", raft.node_id);
-            Arc::new(Mutex::new(PersistVariants::Raft(SignerRaftNode::new(
-                raft.clone(),
-            ))))
+    let (tx, rx) = mpsc::channel::<RaftEvent>();
+    info!("Node ID: {}", config.raft.node_id);
+    let node_id = config.raft.node_id;
+    let raft: Arc<Mutex<SignerRaftNode>> = Arc::new(Mutex::new(SignerRaftNode::new(
+        config.raft.clone(),
+        tx.clone(),
+    )));
+
+    let mut leader_loop: Option<LeaderLoopHandle> = None;
+
+    if let Ok(guard) = raft.lock() {
+        if guard.is_leader() {
+            leader_loop = Some(start_leader_loop(config.clone(), Arc::clone(&raft)));
         }
-        PersistConfig::Local { local } => {
-            info!("Local persistence path: {:?}", local.path);
-            Arc::new(Mutex::new(PersistVariants::Local(
-                persist::LocalState::from_file(&local.path).expect("Failed to read local state"),
-            )))
-        }
-    };
+    }
 
     loop {
-        // TODO: don't connect if we are not the master; it will block the master from connecting
-        // and we need to close the connection on leadership loss
+        match rx.recv() {
+            Ok(RaftEvent::LeadershipChanged(from, to)) => {
+                info!("Leadership changed from: {}, to: {}", from, to);
+                if to == node_id {
+                    if leader_loop.is_none() {
+                        leader_loop = Some(start_leader_loop(config.clone(), Arc::clone(&raft)));
+                    }
+                } else if leader_loop.is_some() {
+                    stop_leader_loop(&mut leader_loop);
+                }
+            }
+            Ok(RaftEvent::StateApplied { .. }) => {}
+            Err(_) => {
+                warn!("Raft event channel closed; shutting down leader loop");
+                stop_leader_loop(&mut leader_loop);
+                break;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+struct LeaderLoopHandle {
+    stop: Arc<AtomicBool>,
+    join: thread::JoinHandle<()>,
+}
+
+fn start_leader_loop(config: Config, persist: Arc<Mutex<SignerRaftNode>>) -> LeaderLoopHandle {
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_for_thread = Arc::clone(&stop);
+    let join = thread::spawn(move || {
         let result = match config.version {
-            ProtocolVersionConfig::V0_34 => run_leader::<VersionV0_34>(&config, &state_persist),
-            ProtocolVersionConfig::V0_37 => run_leader::<VersionV0_37>(&config, &state_persist),
-            ProtocolVersionConfig::V0_38 => run_leader::<VersionV0_38>(&config, &state_persist),
-            ProtocolVersionConfig::V1_0 => run_leader::<VersionV1_0>(&config, &state_persist),
+            ProtocolVersionConfig::V0_34 => {
+                run_leader::<VersionV0_34>(&config, &persist, &stop_for_thread)
+            }
+            ProtocolVersionConfig::V0_37 => {
+                run_leader::<VersionV0_37>(&config, &persist, &stop_for_thread)
+            }
+            ProtocolVersionConfig::V0_38 => {
+                run_leader::<VersionV0_38>(&config, &persist, &stop_for_thread)
+            }
+            ProtocolVersionConfig::V1_0 => {
+                run_leader::<VersionV1_0>(&config, &persist, &stop_for_thread)
+            }
         };
 
         match result {
             Ok(()) => warn!("Leader loop exited normally"),
             Err(e) => error!("Leader loop error: {}", e),
         }
+    });
+
+    LeaderLoopHandle { stop, join }
+}
+
+fn stop_leader_loop(handle: &mut Option<LeaderLoopHandle>) {
+    if let Some(handle) = handle.take() {
+        handle.stop.store(true, Ordering::SeqCst);
+        if let Err(e) = handle.join.join() {
+            warn!("Leader loop thread panicked: {:?}", e);
+        }
     }
 }
 
 fn run_leader<V: ProtocolVersion + Send + 'static>(
     config: &Config,
-    persist: &Arc<Mutex<PersistVariants>>,
+    persist: &Arc<Mutex<SignerRaftNode>>,
+    stop: &Arc<AtomicBool>,
 ) -> Result<(), SignerError> {
     info!(
         "Running leader loop for {} connections",
@@ -160,9 +216,10 @@ fn run_leader<V: ProtocolVersion + Send + 'static>(
             let p = Arc::clone(persist);
             let host = conn.host.clone();
             let port = conn.port;
+            let stop = Arc::clone(stop);
 
             info!("connecting to {host}:{port}");
-            thread::spawn(move || handle_connection::<V>(host, port, config, p))
+            thread::spawn(move || handle_connection::<V>(host, port, config, p, stop))
         })
         .collect();
 
@@ -179,18 +236,35 @@ fn handle_connection<V: ProtocolVersion + Send + 'static>(
     host: String,
     port: u16,
     config: Arc<Config>,
-    persist: Arc<Mutex<PersistVariants>>,
+    persist: Arc<Mutex<SignerRaftNode>>,
+    stop: Arc<AtomicBool>,
 ) -> Result<(), SignerError> {
     let mut retry_count = 0;
     let identity_key = ed25519_consensus::SigningKey::new(rand_core::OsRng);
 
-    let mut signer = crate::signer::create_signer::<V>(&host, port, &identity_key, &config)?;
+    let mut signer =
+        crate::signer::create_signer::<V>(&host, port, &identity_key, &config, Some(&stop))?;
 
     loop {
+        if stop.load(Ordering::SeqCst) {
+            break;
+        }
+
         let response = handle_single_request(&mut signer, &persist);
         if let Err(ref e) = response {
+            if let SignerError::IoError(io) = e {
+                if io.kind() == std::io::ErrorKind::TimedOut
+                    || io.kind() == std::io::ErrorKind::WouldBlock
+                {
+                    if stop.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    continue;
+                }
+            }
+
             error!("Error handling request from {}:{} - {}", host, port, e);
-            match reconnect::<V>(&host, port, &identity_key, &config, &mut retry_count) {
+            match reconnect::<V>(&host, port, &identity_key, &config, &mut retry_count, &stop) {
                 Ok(new_signer) => signer = new_signer,
                 Err(_) => continue,
             }
@@ -198,64 +272,276 @@ fn handle_connection<V: ProtocolVersion + Send + 'static>(
             retry_count = 0;
         }
     }
+    Ok(())
 }
 
 enum RequestProcessingAction<V: ProtocolVersion> {
-    PersistAndSign { request: ValidRequest },
+    SignAndPersist {
+        request: CheckedRequest,
+        request_state: ConsensusData,
+    },
+    ReplayFromCache {
+        request: CheckedRequest,
+        cached: ConsensusData,
+    },
+    ReplayCoreAndSignExtension {
+        vote: Vote,
+        cached: ConsensusData,
+    },
     ReplyWith(Response<V::ProposalResponse, V::VoteResponse, V::PubKeyResponse, V::PingResponse>),
+    // TODO: remove this and use ReplyWith
     ShowPublicKey,
 }
 
-fn process_request<T: SigningBackend, V: ProtocolVersion>(
-    request: Request,
-    consensus_state: &ConsensusData,
-) -> RequestProcessingAction<V> {
+fn proposal_response_from_signature<V: ProtocolVersion>(
+    proposal: &types::Proposal,
+    signature: Vec<u8>,
+) -> Response<V::ProposalResponse, V::VoteResponse, V::PubKeyResponse, V::PingResponse> {
+    Response::Proposal(V::create_proposal_response(proposal, signature))
+}
+
+fn vote_response_from_signature<V: ProtocolVersion>(
+    vote: &types::Vote,
+    signature: Vec<u8>,
+    extension_signature: Option<Vec<u8>>,
+) -> Response<V::ProposalResponse, V::VoteResponse, V::PubKeyResponse, V::PingResponse> {
+    Response::Vote(V::create_vote_response(
+        vote,
+        signature,
+        extension_signature,
+    ))
+}
+
+fn response_from_checked_request_signature<V: ProtocolVersion>(
+    request: &CheckedRequest,
+    signature: Vec<u8>,
+    extension_signature: Option<Vec<u8>>,
+) -> Response<V::ProposalResponse, V::VoteResponse, V::PubKeyResponse, V::PingResponse> {
     match request {
-        Request::Proposal(proposal) => match proposal.check(consensus_state) {
-            CheckedProposalRequest::ValidRequest(request) => {
-                RequestProcessingAction::PersistAndSign { request }
-            }
-            CheckedProposalRequest::DoubleSignProposal(cd) => RequestProcessingAction::ReplyWith(
-                Response::SignedProposal(V::create_double_sign_prop_response(&cd)),
-            ),
-        },
-        Request::Vote(vote) => match vote.check(consensus_state) {
-            CheckedVoteRequest::ValidRequest(request) => {
-                RequestProcessingAction::PersistAndSign { request }
-            }
-            CheckedVoteRequest::DoubleSignVote(cd) => RequestProcessingAction::ReplyWith(
-                Response::SignedVote(V::create_double_sign_vote_response(&cd)),
-            ),
-        },
-        Request::ShowPublicKey => RequestProcessingAction::ShowPublicKey,
-        Request::Ping => {
-            RequestProcessingAction::ReplyWith(Response::Ping(V::create_ping_response()))
+        CheckedRequest::Proposal(proposal) => {
+            proposal_response_from_signature::<V>(proposal, signature)
         }
+        CheckedRequest::Vote(vote) => {
+            vote_response_from_signature::<V>(vote, signature, extension_signature)
+        }
+    }
+}
+
+fn vote_sign_data<V: ProtocolVersion>(
+    vote: &Vote,
+    chain_id: &str,
+) -> Result<(Vec<u8>, Vec<u8>), SignerError> {
+    let sign_data = V::vote_to_bytes(vote, chain_id)?;
+    let ext_sign_data = if vote.step == types::SignedMsgType::Precommit
+        && vote.block_id.as_ref().is_some_and(|id| !id.hash.is_empty())
+    {
+        V::vote_extension_to_bytes(vote, chain_id)?
+    } else {
+        vec![]
+    };
+    Ok((sign_data, ext_sign_data))
+}
+
+fn process_vote_request<V: ProtocolVersion>(
+    mut vote: Vote,
+    current_state: ConsensusData,
+    chain_id: &str,
+) -> Result<RequestProcessingAction<V>, SignerError> {
+    trace!("checking vote: {}", vote);
+    let (sign_data, ext_sign_data) = vote_sign_data::<V>(&vote, chain_id)?;
+
+    let request_state = ConsensusData {
+        height: vote.height,
+        round: vote.round,
+        step: vote.step,
+        sign_data,
+        ext_sign_data,
+        ..Default::default()
+    };
+
+    let is_same_hrs = current_state.height == request_state.height
+        && current_state.round == request_state.round
+        && current_state.step == request_state.step;
+
+    if is_same_hrs && !current_state.sign_data.is_empty() {
+        let ext_matches = if request_state.ext_sign_data.is_empty() {
+            current_state.ext_sign_data.is_empty() && current_state.ext_signature.is_empty()
+        } else {
+            current_state.ext_sign_data == request_state.ext_sign_data
+                && !current_state.ext_signature.is_empty()
+        };
+
+        if current_state.sign_data == request_state.sign_data
+            && !current_state.signature.is_empty()
+            && ext_matches
+        {
+            info!("replaying stored vote signature for vote: {}", vote);
+            return Ok(RequestProcessingAction::ReplayFromCache {
+                request: CheckedRequest::Vote(vote),
+                cached: current_state,
+            });
+        }
+
+        let only_ts = V::vote_sign_bytes_only_differ_by_timestamp(
+            &current_state.sign_data,
+            &request_state.sign_data,
+        )?;
+
+        if only_ts && !current_state.signature.is_empty() {
+            V::restore_vote_timestamp(&mut vote, &current_state.sign_data)?;
+
+            if !request_state.ext_sign_data.is_empty() && !ext_matches {
+                info!(
+                    "replaying the persisted core vote and signing a fresh vote extension: {}",
+                    current_state
+                );
+                return Ok(RequestProcessingAction::ReplayCoreAndSignExtension {
+                    vote,
+                    cached: current_state,
+                });
+            }
+
+            let mut cached = current_state;
+            if request_state.ext_sign_data.is_empty() {
+                cached.ext_sign_data.clear();
+                cached.ext_signature.clear();
+            }
+            info!(
+                "restoring the persisted vote timestamp and replaying its core signature: {}",
+                cached
+            );
+            return Ok(RequestProcessingAction::ReplayFromCache {
+                request: CheckedRequest::Vote(vote),
+                cached,
+            });
+        }
+
+        return Ok(RequestProcessingAction::ReplyWith(Response::Vote(
+            V::create_double_sign_vote_response(&request_state),
+        )));
+    }
+
+    info!("checking vote, current state: {}", current_state);
+    match vote.check(&current_state) {
+        protocol::CheckedVoteRequest::DoubleSignVote(consensus_data) => {
+            Ok(RequestProcessingAction::ReplyWith(Response::Vote(
+                V::create_double_sign_vote_response(&consensus_data),
+            )))
+        }
+        protocol::CheckedVoteRequest::ValidRequest(checked_request) => {
+            info!("valid vote, issuing a sign and persist command");
+            Ok(RequestProcessingAction::SignAndPersist {
+                request: checked_request,
+                request_state,
+            })
+        }
+    }
+}
+
+/// Determines the course of action for a request.
+///
+/// For non-consensus requests (Show public key or Ping), return a command with a ready to send reply.
+/// For consensus requests (Proposal or Vote), check the request against the signer's state and:
+/// - for proposals, check if the height/round has already been signed. If yes, reply with a "would double sign error". If no, return a command to persist the state and sign over the proposal.
+/// - for votes, build the corresponding consensus state (height/round/step and sign bytes) and:
+///   - if the request matches the current signer state at the same height/round/step:
+///     - if the stored vote and incoming vote are identical besides timestamp differences allowed by the protocol version, restore the persisted timestamp and replay the persisted core signature.
+///     - if the stored vote is identical, return a command to replay the stored signature.
+///     - if the vote conflicts with the stored state, reply with a "would double sign error".
+///   - otherwise, run the standard vote validation against the signer state and either return a double sign error or a command to persist the state and sign the vote.
+fn process_request<V: ProtocolVersion>(
+    request: Request,
+    raft_node: &SignerRaftNode,
+    chain_id: &str,
+) -> Result<RequestProcessingAction<V>, SignerError> {
+    match request {
+        Request::Proposal(proposal) => {
+            trace!("checking proposal: {:?}", proposal);
+            match proposal.check(&raft_node.signer_state.read().unwrap().clone()) {
+                protocol::CheckedProposalRequest::DoubleSignProposal(consensus_data) => {
+                    Ok(RequestProcessingAction::ReplyWith(Response::Proposal(
+                        V::create_double_sign_prop_response(&consensus_data),
+                    )))
+                }
+                protocol::CheckedProposalRequest::ValidRequest(checked_request) => {
+                    Ok(RequestProcessingAction::SignAndPersist {
+                        request: checked_request.clone(),
+                        request_state: ConsensusData::from(&checked_request),
+                    })
+                }
+            }
+        }
+        Request::Vote(vote) => process_vote_request::<V>(
+            vote,
+            raft_node.signer_state.read().unwrap().clone(),
+            chain_id,
+        ),
+        Request::ShowPublicKey => Ok(RequestProcessingAction::ShowPublicKey),
+        Request::Ping => Ok(RequestProcessingAction::ReplyWith(Response::Ping(
+            V::create_ping_response(),
+        ))),
     }
 }
 
 pub fn handle_single_request<T: SigningBackend, V: ProtocolVersion, C: Read + Write>(
     signer: &mut Signer<T, V, C>,
-    persist: &Arc<Mutex<PersistVariants>>,
+    raft: &Arc<Mutex<SignerRaftNode>>,
 ) -> Result<(), SignerError> {
     let start = std::time::Instant::now();
     let request = signer.read_request()?;
 
-    info!("Received request after {:?}", start.elapsed());
-    debug!("Request: {request:?}");
+    info!(
+        "Received request after {:?}. Request: {:?}",
+        start.elapsed(),
+        request
+    );
     let start = std::time::Instant::now();
-    let mut guard = persist.lock().unwrap();
-    let consensus_state = guard.state();
+    let raft = raft.lock().unwrap();
+    let action = process_request::<V>(request, &raft, signer.chain_id())?;
 
-    let action = process_request::<T, V>(request, &consensus_state);
     let response = match action {
-        RequestProcessingAction::PersistAndSign { request } => match guard.persist(request) {
-            Err(e) => {
-                error!("Could not persist state: {e:?}");
-                V::create_error_response(&format!("Cannot persist new consensus state: {e:?}"))
+        RequestProcessingAction::SignAndPersist {
+            request,
+            mut request_state,
+        } => {
+            let (signature, extension_signature) = signer.sign_request(&request)?;
+            if request_state.sign_data.is_empty() {
+                request_state.sign_data = match &request {
+                    CheckedRequest::Proposal(proposal) => {
+                        V::proposal_to_bytes(proposal, signer.chain_id())?
+                    }
+                    CheckedRequest::Vote(vote) => V::vote_to_bytes(vote, signer.chain_id())?,
+                };
             }
-            Ok(persisted) => signer.sign(persisted)?,
-        },
+            request_state.signature = signature.clone();
+            request_state.ext_signature = extension_signature.clone().unwrap_or_default();
+
+            if let Err(e) = raft.replicate_state(&request_state) {
+                error!("Could not persist state: {e}");
+                V::create_error_response(&format!("Cannot persist new consensus state: {e}"))
+            } else {
+                info!("responding with a fresh signature");
+
+                response_from_checked_request_signature::<V>(
+                    &request,
+                    signature,
+                    extension_signature,
+                )
+            }
+        }
+        RequestProcessingAction::ReplayFromCache { request, cached } => {
+            info!("responding with a cached response");
+            response_from_checked_request_signature::<V>(
+                &request,
+                cached.signature.clone(),
+                (!cached.ext_signature.is_empty()).then_some(cached.ext_signature.clone()),
+            )
+        }
+        RequestProcessingAction::ReplayCoreAndSignExtension { vote, cached } => {
+            let extension_signature = signer.sign_vote_extension(&vote)?;
+            info!("responding with a cached core signature and fresh vote extension signature");
+            vote_response_from_signature::<V>(&vote, cached.signature, Some(extension_signature))
+        }
         RequestProcessingAction::ReplyWith(response) => response,
         RequestProcessingAction::ShowPublicKey => {
             let public_key = signer.public_key()?;
@@ -263,13 +549,12 @@ pub fn handle_single_request<T: SigningBackend, V: ProtocolVersion, C: Read + Wr
         }
     };
 
-    info!("Processing request took: {:?}", start.elapsed());
-    let start = std::time::Instant::now();
-
-    debug!("Sending response to validator");
+    info!(
+        "Processing request took: {:?}, sending response to validator",
+        start.elapsed()
+    );
     signer.send_response(response)?;
-    drop(guard);
-    info!("Sending the response took: {:?}", start.elapsed());
+    drop(raft);
     Ok(())
 }
 
@@ -279,10 +564,15 @@ fn reconnect<V: ProtocolVersion>(
     identity_key: &ed25519_consensus::SigningKey,
     config: &Config,
     retry_count: &mut u32,
-) -> Result<Signer<Box<dyn SigningBackend>, V, SecretConnection<TcpStream>>, SignerError> {
+    stop: &AtomicBool,
+) -> Result<crate::signer::NetworkSigner<V>, SignerError> {
     const MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
 
     loop {
+        if stop.load(Ordering::SeqCst) {
+            return Err(SignerError::NotLeader(config.raft.node_id.to_string()));
+        }
+
         *retry_count += 1;
         let delay =
             Duration::from_millis(100 * 2_u64.pow((*retry_count).min(10))).min(MAX_RETRY_DELAY);
@@ -293,7 +583,11 @@ fn reconnect<V: ProtocolVersion>(
         );
         thread::sleep(delay);
 
-        match crate::signer::create_signer::<V>(host, port, identity_key, config) {
+        if stop.load(Ordering::SeqCst) {
+            return Err(SignerError::NotLeader(config.raft.node_id.to_string()));
+        }
+
+        match crate::signer::create_signer::<V>(host, port, identity_key, config, Some(stop)) {
             Ok(signer) => {
                 info!("Successfully reconnected to {}:{}", host, port);
                 *retry_count = 0;
@@ -302,6 +596,98 @@ fn reconnect<V: ProtocolVersion>(
             Err(e) => {
                 error!("Reconnection failed for {}:{} - {}", host, port, e);
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod request_safety_tests {
+    use super::*;
+    use crate::types::{BlockId, PartSetHeader, SignedMsgType};
+
+    fn test_vote(step: SignedMsgType, timestamp: i64, extension: &[u8]) -> Vote {
+        Vote {
+            step,
+            height: 42,
+            round: 3,
+            timestamp: Some(timestamp),
+            block_id: Some(BlockId {
+                hash: vec![0xAA; 32],
+                parts: Some(PartSetHeader {
+                    total: 1,
+                    hash: vec![0xBB; 32],
+                }),
+            }),
+            validator_address: vec![0xCC; 20],
+            validator_index: 7,
+            extension: extension.to_vec(),
+            extension_signature: vec![],
+        }
+    }
+
+    fn persisted_vote(vote: &Vote) -> ConsensusData {
+        let (sign_data, ext_sign_data) =
+            vote_sign_data::<VersionV0_38>(vote, "timestamp-test-chain").unwrap();
+        ConsensusData {
+            height: vote.height,
+            round: vote.round,
+            step: vote.step,
+            sign_data,
+            signature: b"persisted-core-signature".to_vec(),
+            ext_sign_data,
+            ext_signature: b"persisted-extension-signature".to_vec(),
+        }
+    }
+
+    #[test]
+    fn timestamp_only_retry_restores_timestamp_and_replays_core_signature() {
+        let original = test_vote(SignedMsgType::Prevote, 1_700_000_000_000_000_001, &[]);
+        let cached = persisted_vote(&original);
+        let retry = test_vote(SignedMsgType::Prevote, 1_700_000_000_999_999_999, &[]);
+
+        let action =
+            process_vote_request::<VersionV0_38>(retry, cached.clone(), "timestamp-test-chain")
+                .unwrap();
+
+        match action {
+            RequestProcessingAction::ReplayFromCache {
+                request: CheckedRequest::Vote(vote),
+                cached: replayed,
+            } => {
+                assert_eq!(vote.timestamp, original.timestamp);
+                assert_eq!(replayed.signature, cached.signature);
+            }
+            _ => panic!("timestamp-only retry must not create a second core signature"),
+        }
+    }
+
+    #[test]
+    fn changed_vote_extension_reuses_core_but_requests_fresh_extension_signature() {
+        let original = test_vote(
+            SignedMsgType::Precommit,
+            1_700_000_000_000_000_001,
+            b"extension-a",
+        );
+        let cached = persisted_vote(&original);
+        let retry = test_vote(
+            SignedMsgType::Precommit,
+            1_700_000_000_999_999_999,
+            b"extension-b",
+        );
+
+        let action =
+            process_vote_request::<VersionV0_38>(retry, cached.clone(), "timestamp-test-chain")
+                .unwrap();
+
+        match action {
+            RequestProcessingAction::ReplayCoreAndSignExtension {
+                vote,
+                cached: replayed,
+            } => {
+                assert_eq!(vote.timestamp, original.timestamp);
+                assert_eq!(replayed.signature, cached.signature);
+            }
+            _ => panic!("vote-extension changes must not re-sign the core vote"),
         }
     }
 }

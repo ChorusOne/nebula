@@ -3,15 +3,16 @@ use crate::backend::SigningBackend;
 use crate::config::Config;
 use crate::connection::open_secret_connection;
 use crate::error::SignerError;
-use crate::persist::PersistedRequest;
-use crate::protocol::{Request, Response, ValidRequest};
+use crate::protocol::{CheckedRequest, Request, Response};
 use crate::types::{BufferError, SignedMsgType};
 use crate::versions::ProtocolVersion;
+use log::trace;
 use log::{debug, info};
 use prost::Message as _;
 use std::io::{Read, Write};
 use std::marker::PhantomData;
 use std::net::TcpStream;
+use std::sync::atomic::AtomicBool;
 use tendermint_p2p::secret_connection::SecretConnection;
 
 pub struct Signer<T: SigningBackend, V: ProtocolVersion, C: Read + Write> {
@@ -21,6 +22,8 @@ pub struct Signer<T: SigningBackend, V: ProtocolVersion, C: Read + Write> {
     _version: PhantomData<V>,
     read_buffer: Vec<u8>,
 }
+
+pub type NetworkSigner<V> = Signer<Box<dyn SigningBackend>, V, SecretConnection<TcpStream>>;
 
 impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
     pub fn new(signer: T, connection: C, chain_id: String) -> Self {
@@ -33,56 +36,66 @@ impl<T: SigningBackend, V: ProtocolVersion, C: Read + Write> Signer<T, V, C> {
         }
     }
 
+    pub fn chain_id(&self) -> &str {
+        &self.chain_id
+    }
+
     pub fn public_key(&self) -> Result<PublicKey, SignerError> {
         self.signer.public_key()
     }
 
-    pub fn sign(
+    pub fn sign_request(
         &mut self,
-        request: PersistedRequest,
-    ) -> Result<
-        Response<V::ProposalResponse, V::VoteResponse, V::PubKeyResponse, V::PingResponse>,
-        SignerError,
-    > {
-        match request.0 {
-            ValidRequest::Proposal(proposal) => {
-                let signable_data = V::proposal_to_bytes(&proposal, &self.chain_id)?;
+        request: &CheckedRequest,
+    ) -> Result<(Vec<u8>, Option<Vec<u8>>), SignerError> {
+        match request {
+            CheckedRequest::Proposal(proposal) => {
+                let signable_data = V::proposal_to_bytes(proposal, &self.chain_id)?;
                 let signature = self.signer.sign(&signable_data)?;
-                debug!("Signature: {}", hex::encode(&signature));
-                debug!("Signable data: {}", hex::encode(&signable_data));
-
-                let response = V::create_proposal_response(&proposal, signature);
-                Ok(Response::SignedProposal(response))
+                trace!("Signature: {}", hex::encode(&signature));
+                trace!("Signable data: {}", hex::encode(&signable_data));
+                Ok((signature, None))
             }
-            ValidRequest::Vote(vote) => {
+            CheckedRequest::Vote(vote) => {
                 // TODO: chain id should be parsed from the request, and compared to what we're expecting
                 // ^ no chain_id in the request. if we configure wrong chain_id in the config
                 // ^ actually it IS in the request and it IS in the canonical vote / proposal
                 // i just dropped it somewhere
-                let signable_data = V::vote_to_bytes(&vote, &self.chain_id)?;
+                let signable_data = V::vote_to_bytes(vote, &self.chain_id)?;
                 let signature = self.signer.sign(&signable_data)?;
                 if vote.step == SignedMsgType::Precommit
                     && vote.block_id.as_ref().is_some_and(|id| !id.hash.is_empty())
                 {
-                    info!("it's a precommit with a non-nil block ID");
-                    let extension_signable_data =
-                        V::vote_extension_to_bytes(&vote, &self.chain_id)?;
+                    debug!("it's a precommit with a non-nil block ID");
+                    let extension_signable_data = V::vote_extension_to_bytes(vote, &self.chain_id)?;
                     let ext_sig = self.signer.sign(&extension_signable_data)?;
-                    debug!(
+                    trace!(
                         "Extension signable data: {}",
                         hex::encode(&extension_signable_data)
                     );
-                    debug!("Extension signature: {}", hex::encode(&ext_sig));
-                    let response = V::create_vote_response(&vote, signature, Some(ext_sig));
-                    return Ok(Response::SignedVote(response));
+                    trace!("Extension signature: {}", hex::encode(&ext_sig));
+                    return Ok((signature, Some(ext_sig)));
                 }
-                info!("no vote ext this time");
-                debug!("Signature: {}", hex::encode(&signature));
-                debug!("Signable data: {}", hex::encode(&signable_data));
-                let response = V::create_vote_response(&vote, signature, None);
-                Ok(Response::SignedVote(response))
+                debug!("no vote ext this time");
+                trace!("Signature: {}", hex::encode(&signature));
+                trace!("Signable data: {}", hex::encode(&signable_data));
+                Ok((signature, None))
             }
         }
+    }
+
+    pub fn sign_vote_extension(
+        &mut self,
+        vote: &crate::types::Vote,
+    ) -> Result<Vec<u8>, SignerError> {
+        if vote.step != SignedMsgType::Precommit
+            || vote.block_id.as_ref().is_none_or(|id| id.hash.is_empty())
+        {
+            return Err(SignerError::InvalidData);
+        }
+
+        let signable_data = V::vote_extension_to_bytes(vote, &self.chain_id)?;
+        self.signer.sign(&signable_data)
     }
 
     pub fn read_request(&mut self) -> Result<Request, SignerError> {
@@ -149,7 +162,8 @@ pub fn create_signer<V: ProtocolVersion>(
     port: u16,
     identity_key: &ed25519_consensus::SigningKey,
     config: &Config,
-) -> Result<Signer<Box<dyn SigningBackend>, V, SecretConnection<TcpStream>>, SignerError> {
+    stop: Option<&AtomicBool>,
+) -> Result<NetworkSigner<V>, SignerError> {
     info!("Connecting to CometBFT at {}:{}", host, port);
 
     let conn = open_secret_connection(
@@ -157,6 +171,7 @@ pub fn create_signer<V: ProtocolVersion>(
         port,
         identity_key.clone(),
         tendermint_p2p::secret_connection::Version::V0_34,
+        stop,
     )?;
 
     let backend = crate::backend::create_backend(config)?;
